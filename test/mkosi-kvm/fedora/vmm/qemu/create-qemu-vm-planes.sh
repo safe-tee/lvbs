@@ -8,10 +8,14 @@ IMAGE_DIR="$SCRIPT_DIR/../../image"
 PLANE0_DISK="${PLANE0_DISK:-$IMAGE_DIR/fedora-kvm.raw}"
 ENABLE_PLANES="${ENABLE_PLANES:-1}"
 MEMORY_SIZE="${MEMORY_SIZE:-4G}"
-# Plane-0 vCPU count (plane-1 vCPUs are created dynamically via hypercall)
+# Plane-0 vCPU count.
 SMP="${SMP:-3}"
-# Total vCPU limit: plane-0 + plane-1 vCPUs (default: 3 + 1 = 4)
-MAXCPUS="${MAXCPUS:-4}"
+# Keep total VM vCPU capacity unchanged by default.
+# Plane vCPUs are created per plane using existing plane-0 vCPU IDs.
+MAXCPUS="${MAXCPUS:-$SMP}"
+KERNEL_IRQCHIP_MODE="${KERNEL_IRQCHIP_MODE:-split}"
+# Device IRQ destination plane for split irqchip/APIC/MSI routing.
+DEVICE_PLANE="${DEVICE_PLANE:-0}"
 SERIAL_CONSOLE="-serial mon:stdio"
 BIOS="${BIOS:-/usr/share/edk2/ovmf/OVMF_CODE_4M.qcow2}"
 OVMF_VARS="${OVMF_VARS:-$IMAGE_DIR/OVMF_VARS_4M.qcow2}"
@@ -29,7 +33,7 @@ Options:
   -h, --help              Show this help
 
 Environment variable overrides are also supported:
-  PLANE0_DISK ENABLE_PLANES MEMORY_SIZE SMP BIOS OVMF_VARS
+    PLANE0_DISK ENABLE_PLANES MEMORY_SIZE SMP MAXCPUS KERNEL_IRQCHIP_MODE DEVICE_PLANE BIOS OVMF_VARS
 EOF
 }
 
@@ -108,6 +112,8 @@ echo "  OVMF firmware:    $BIOS"
 echo "  OVMF variables:   $OVMF_VARS"
 echo "  Memory:           $MEMORY_SIZE"
 echo "  SMP:              $SMP"
+echo "  Kernel irqchip:   $KERNEL_IRQCHIP_MODE"
+echo "  Device plane:     $DEVICE_PLANE"
 echo "  Planes:           $(if [[ "$ENABLE_PLANES" == "1" ]]; then echo enabled; else echo disabled; fi)"
 
 if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
@@ -118,7 +124,7 @@ fi
 
 qemu-system-x86_64 \
     -enable-kvm \
-    -machine q35 \
+    -machine q35,kernel-irqchip="$KERNEL_IRQCHIP_MODE",device-plane="$DEVICE_PLANE" \
     -cpu host \
     -m "$MEMORY_SIZE" \
     -smp "$SMP",maxcpus="$MAXCPUS" \

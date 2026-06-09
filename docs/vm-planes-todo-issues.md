@@ -6,7 +6,7 @@ Tracking TODO/FIXME items discovered in the `vm-planes` branch of the Linux kern
 
 ## Issue 1: Allow SNP to use VM Planes for Virtual Trust Levels (VTPLs)
 
-**File:** `arch/x86/kvm/x86.c` (line 14536)  
+**File:** `arch/x86/kvm/x86.c` (line 14536)
 **Labels:** `enhancement`, `kvm`, `sev-snp`, `vm-planes`
 
 ### Description
@@ -31,7 +31,7 @@ Introduce a `kvm_x86_ops` callback (e.g., `.nr_vcpu_planes()`) so that each vend
 
 ## Issue 2: Handle page-boundary-splitting MMIO in SEV-ES emulated MMIO path
 
-**File:** `arch/x86/kvm/x86.c` (line 14608)  
+**File:** `arch/x86/kvm/x86.c` (line 14608)
 **Labels:** `bug`, `kvm`, `sev-es`
 
 ### Description
@@ -58,7 +58,7 @@ Audit the userspace MMIO handling to confirm cross-page fragments are supported.
 
 ## Issue 3: TDX Secure EPT — Add large page (hugepage) support for private memory mapping
 
-**File:** `arch/x86/kvm/vmx/tdx.c` (lines 1664, 1796)  
+**File:** `arch/x86/kvm/vmx/tdx.c` (lines 1664, 1796)
 **Labels:** `enhancement`, `kvm`, `tdx`
 
 ### Description
@@ -90,7 +90,7 @@ Implement 2M (and optionally 1G) page support using `TDH.MEM.PAGE.ADD` / `TDH.ME
 
 ## Issue 4: TDX CPUID metadata read should check for specific TDX error codes
 
-**File:** `arch/x86/kvm/vmx/tdx.c` (line 2608)  
+**File:** `arch/x86/kvm/vmx/tdx.c` (line 2608)
 **Labels:** `bug`, `kvm`, `tdx`
 
 ### Description
@@ -117,7 +117,7 @@ Check the specific TDX error code returned by `tdx_td_metadata_field_read()` and
 
 ## Issue 5: guest_memfd — Add hugepage support
 
-**File:** `virt/kvm/guest_memfd.c` (line 122)  
+**File:** `virt/kvm/guest_memfd.c` (line 122)
 **Labels:** `enhancement`, `kvm`, `guest-memfd`
 
 ### Description
@@ -142,7 +142,7 @@ Extend `kvm_gmem_get_folio()` to allocate and manage compound folios (order-9 fo
 
 ## Issue 6: Remove WARN on guest_memfd memslot unbind once dirty logging is supported
 
-**File:** `virt/kvm/kvm_main.c` (line 1791)  
+**File:** `virt/kvm/kvm_main.c` (line 1791)
 **Labels:** `cleanup`, `kvm`, `guest-memfd`
 
 ### Description
