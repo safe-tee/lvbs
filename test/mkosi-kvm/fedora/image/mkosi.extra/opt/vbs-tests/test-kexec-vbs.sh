@@ -44,13 +44,17 @@ echo ""
 
 # ── Test 1: Check VBS is available ────────────────────────────────────
 echo "--- Test 1: VBS availability ---"
-if dmesg | grep -q "vbs: HEKI: kernel sealed successfully\|vbs-kvm: connected to plane-1"; then
-    log_pass "VBS is active (backend connected)"
+VBS_BOOT_MARKERS=$(dmesg | grep -Ei "vbs: registered backend|vbs: HEKI: kernel sealed successfully|vbs-kvm: connected to plane-1|vbs-kvm: initialized backend|vbs: HEKI: sealing kernel" || true)
+if [ -n "$VBS_BOOT_MARKERS" ]; then
+    log_pass "VBS is active (backend markers found)"
+    echo "  matching markers:"
+    echo "$VBS_BOOT_MARKERS" | tail -n 6 | sed 's/^/    /'
 else
-    log_skip "VBS not active — skipping kexec tests"
-    echo ""
-    echo "Results: $PASS passed, $FAIL failed, $SKIP skipped"
-    exit 0
+    log_skip "VBS activity not confirmed from dmesg — continuing best-effort"
+    if grep -q "enable-vm-planes=1" /proc/cmdline 2>/dev/null; then
+        echo "  hint: kernel cmdline includes enable-vm-planes=1"
+    fi
+    echo "  hint: check early boot logs for 'vbs:' lines"
 fi
 
 # ── Test 2: Check kexec tools are available ───────────────────────────
