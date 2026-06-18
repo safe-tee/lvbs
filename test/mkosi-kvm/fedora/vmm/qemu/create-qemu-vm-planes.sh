@@ -17,6 +17,15 @@ KERNEL_IRQCHIP_MODE="${KERNEL_IRQCHIP_MODE:-split}"
 # Device IRQ destination plane for split irqchip/APIC/MSI routing.
 DEVICE_PLANE="${DEVICE_PLANE:-0}"
 SERIAL_CONSOLE="-serial mon:stdio"
+# Plane 1 secure-plane serial: its earlycon writes to COM2 (I/O 0x2f8), which
+# QEMU presents as the second -serial port and we redirect to a dedicated file
+# so the secure plane's boot/park output does not interleave with plane 0.
+PLANE1_SERIAL_LOG="${PLANE1_SERIAL_LOG:-/tmp/plane1-serial.log}"
+if [[ "$ENABLE_PLANES" == "1" ]]; then
+    PLANE1_SERIAL="-serial file:$PLANE1_SERIAL_LOG"
+else
+    PLANE1_SERIAL=""
+fi
 BIOS="${BIOS:-/usr/share/edk2/ovmf/OVMF_CODE_4M.qcow2}"
 OVMF_VARS="${OVMF_VARS:-$IMAGE_DIR/OVMF_VARS_4M.qcow2}"
 
@@ -33,7 +42,7 @@ Options:
   -h, --help              Show this help
 
 Environment variable overrides are also supported:
-    PLANE0_DISK ENABLE_PLANES MEMORY_SIZE SMP MAXCPUS KERNEL_IRQCHIP_MODE DEVICE_PLANE BIOS OVMF_VARS
+    PLANE0_DISK ENABLE_PLANES MEMORY_SIZE SMP MAXCPUS KERNEL_IRQCHIP_MODE DEVICE_PLANE BIOS OVMF_VARS PLANE1_SERIAL_LOG
 EOF
 }
 
@@ -115,6 +124,9 @@ echo "  SMP:              $SMP"
 echo "  Kernel irqchip:   $KERNEL_IRQCHIP_MODE"
 echo "  Device plane:     $DEVICE_PLANE"
 echo "  Planes:           $(if [[ "$ENABLE_PLANES" == "1" ]]; then echo enabled; else echo disabled; fi)"
+if [[ "$ENABLE_PLANES" == "1" ]]; then
+    echo "  Plane 1 serial:   $PLANE1_SERIAL_LOG"
+fi
 
 if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "qemu-system-x86_64 was not found in PATH." >&2
@@ -132,4 +144,5 @@ qemu-system-x86_64 \
     -drive file="$PLANE0_DISK",format=raw,if=virtio \
     -drive if=pflash,format=qcow2,readonly=on,file="$BIOS" \
     -drive if=pflash,format=qcow2,file="$OVMF_VARS" \
-    $SERIAL_CONSOLE
+    $SERIAL_CONSOLE \
+    $PLANE1_SERIAL
