@@ -60,14 +60,14 @@ echo "CONFIG_INITRAMFS_SOURCE=\"$INITRAMFS_DIR\"" >> "$BUILD_ROOT/.config"
 # The plane cmdline uses maxcpus=1 to boot with only the BSP.
 set_kconfig_bool CONFIG_SMP y
 
-# ─── KVM VM-planes secure-plane (plane 1) park support ───
+# ─── KVM VM-planes secure-plane (plane 1) monitor support ───
 # This secure kernel runs as plane 1.  It must hand control back to the
 # normal plane (plane 0) via the KVM_HC_VBS_VTL_RETURN hypercall and then
-# service VTL calls.  CONFIG_VBS_PARK provides that in-kernel handshake
-# WITHOUT pulling in the full VBS/HEKI stack.  It is activated by the
-# "vbs_park" kernel command-line option (see build-vm-planes-image.sh).
+# service VTL calls.  CONFIG_VBS_SECURE_MONITOR provides that in-kernel
+# handshake WITHOUT pulling in the full VBS/HEKI stack.  It is activated by
+# the "secure_monitor" kernel command-line option (see build-vm-planes-image.sh).
 set_kconfig_bool CONFIG_VIRT_DRIVERS y
-set_kconfig_bool CONFIG_VBS_PARK y
+set_kconfig_bool CONFIG_VBS_SECURE_MONITOR y
 
 # ─── Strip unnecessary drivers/subsystems ───
 # The secure kernel runs a minimal initramfs with no hardware interaction

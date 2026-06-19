@@ -26,8 +26,8 @@ VTL1_TARGET_PLANE_DEFAULT="1"
 VTL1_TARGET_PLANE="${VTL1_TARGET_PLANE:-$VTL1_TARGET_PLANE_DEFAULT}"
 VTL1_MEMORY_SIZE_DEFAULT="0x60000000"
 VTL1_MEMORY_SIZE="${VTL1_MEMORY_SIZE:-$VTL1_MEMORY_SIZE_DEFAULT}"
-# vbs_park activates the in-kernel secure-plane park loop (drivers/virt/
-# vbs_park.c): its late_initcall spawns the "vbs-park" kthread which
+# secure_monitor activates the in-kernel secure-plane monitor (drivers/virt/
+# secure_monitor.c): its late_initcall spawns the "vbs-secmon" kthread which
 # immediately issues KVM_HC_VBS_VTL_RETURN to park the secure plane and hand
 # control back to plane 0.  Without it the secure kernel never parks, and
 # instead boots on toward rdinit=/init and hangs.  This is decoupled from the
@@ -37,7 +37,8 @@ VTL1_MEMORY_SIZE="${VTL1_MEMORY_SIZE:-$VTL1_MEMORY_SIZE_DEFAULT}"
 # IMPORTANT: the secure plane gets no periodic timer tick, so jiffies never
 # advance there.  The full 8250 serial driver's port autoconfig does a
 # jiffies-based busy wait and therefore spins forever (hang right after
-# "Serial: 8250/16550 driver", before late_initcall, so vbs_park never runs).
+# "Serial: 8250/16550 driver", before late_initcall, so secure_monitor never
+# runs).
 # Work around it by disabling the 8250 ports (8250.nr_uarts=0) and keeping the
 # pure-polled earlycon as the console (drop console=ttyS0, add keep_bootcon) so
 # output survives all the way to the park.  This is a bring-up workaround; a
@@ -48,7 +49,7 @@ VTL1_MEMORY_SIZE="${VTL1_MEMORY_SIZE:-$VTL1_MEMORY_SIZE_DEFAULT}"
 # the shared COM1 (0x3f8).  The QEMU launch script wires COM2 to a dedicated
 # file (/tmp/plane1-serial.log) so the secure plane's boot/park output lands in
 # its own log rather than interleaving with plane 0 on stdio.
-VTL1_CMDLINE_DEFAULT="earlycon=uart8250,io,0x2f8,115200n8 keep_bootcon loglevel=7 maxcpus=1 noefi 8250.nr_uarts=0 vbs_park rdinit=/init panic=1"
+VTL1_CMDLINE_DEFAULT="earlycon=uart8250,io,0x2f8,115200n8 keep_bootcon loglevel=7 maxcpus=1 noefi 8250.nr_uarts=0 secure_monitor rdinit=/init panic=1"
 # Plane 1 cmdline is sealed into config-vm-planes (inside the UKI initrd).
 # Keep this build-time constant here so there is no runtime override path.
 VTL1_CMDLINE="$VTL1_CMDLINE_DEFAULT"
