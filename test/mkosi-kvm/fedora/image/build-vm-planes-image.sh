@@ -17,14 +17,28 @@ VTL1_KERNEL_SRC_DEFAULT="$VTL1_BUILD_DIR/vmlinux"
 VTL0_KERNEL_SRC="${VTL0_KERNEL_SRC:-$VTL0_KERNEL_SRC_DEFAULT}"
 VTL1_KERNEL_SRC="${VTL1_KERNEL_SRC:-$VTL1_KERNEL_SRC_DEFAULT}"
 
-# Physical address where VTL1 should be loaded by the VTL0 launcher.
-VTL1_LOAD_OFFSET_DEFAULT="0x0"
+# Physical base where plane 1 (VTL1) RAM is carved out of plane 0's RAM
+# (Windows-VBS / VTL model).  The region [LOAD_OFFSET, LOAD_OFFSET+MEMORY_SIZE)
+# is reserved from plane 0 via a matching memmap= on the plane-0 kernel command
+# line (see finalize-image.sh.chroot) so plane 0 never allocates there and the
+# secure plane owns it exclusively.  Constraints:
+#   - Must stay < 4GB (QEMU builds a 4GB identity map for the plane).
+#   - Must clear plane-0's low <1MB real-mode trampoline.
+#   - Must match the memmap= reservation on the plane-0 cmdline.
+#   - Must end BELOW the firmware ACPI tables that OVMF places at the top of
+#     plane-0's low (<4GB) RAM block (~0x7fb6d000 with -m 4G), so the memmap
+#     reservation does not steal them from plane 0.  0x40000000 + 0x3c000000 =
+#     0x7c000000 leaves the top 64MB of the 2GB block (ACPI/NVS/reserved) to
+#     plane 0.
+# (A later step has the secure plane additionally seal this exact range in
+# plane 0's EPT.)
+VTL1_LOAD_OFFSET_DEFAULT="0x40000000"
 VTL1_LOAD_OFFSET="${VTL1_LOAD_OFFSET:-$VTL1_LOAD_OFFSET_DEFAULT}"
 
 # Verified VTL1 execution must enter Plane 1.
 VTL1_TARGET_PLANE_DEFAULT="1"
 VTL1_TARGET_PLANE="${VTL1_TARGET_PLANE:-$VTL1_TARGET_PLANE_DEFAULT}"
-VTL1_MEMORY_SIZE_DEFAULT="0x60000000"
+VTL1_MEMORY_SIZE_DEFAULT="0x3c000000"
 VTL1_MEMORY_SIZE="${VTL1_MEMORY_SIZE:-$VTL1_MEMORY_SIZE_DEFAULT}"
 # secure_monitor activates the in-kernel secure-plane monitor (drivers/virt/
 # secure_monitor.c): its late_initcall spawns the "vbs-secmon" kthread which

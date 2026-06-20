@@ -26,9 +26,17 @@ cat > /etc/kernel/install.conf <<'EOF'
 layout=uki
 EOF
 
-# Set kernel command line for console and logging
+# Set kernel command line for console and logging.
+#
+# memmap=0x3c000000$0x40000000 carves [1GB, 0x7c000000) out of plane 0's RAM so
+# the secure plane (plane 1) owns it exclusively (Windows-VBS / VTL model).  This
+# range MUST match VTL1_LOAD_OFFSET / VTL1_MEMORY_SIZE in build-vm-planes-image.sh:
+# plane 0 must never allocate here.  The carve ends at 0x7c000000 (not
+# 0x80000000) so the firmware ACPI tables that OVMF places at the top of the 2GB
+# block (~0x7fb6d000+) stay owned by plane 0.  (A later step has the secure plane
+# seal this exact region in plane 0's EPT once plane 1 has booted.)
 cat > /etc/kernel/cmdline <<'EOF'
-earlycon=uart8250,io,0x3f8,115200n8 console=ttyS0 console=tty0 root=/dev/vda2 rw rd.systemd.show_status=true lsm=bpf,lockdown,yama,integrity systemd.gpt_auto=0 enable-vm-planes=1
+earlycon=uart8250,io,0x3f8,115200n8 console=ttyS0 console=tty0 root=/dev/vda2 rw rd.systemd.show_status=true lsm=bpf,lockdown,yama,integrity systemd.gpt_auto=0 enable-vm-planes=1 memmap=0x3c000000$0x40000000
 EOF
 
 echo "[INSTRUMENTATION] Kernel command line configured:"
