@@ -221,11 +221,8 @@ ltmain.sh
 m4
 missing
 
-build/Makefile
-build/config.status
-build/include
-build/libtool
-build/src
+# Top-level out-of-tree build directory (kernel, QEMU, and other build output)
+/build/
 
 include/config.h.in
 include/config.h.in~
