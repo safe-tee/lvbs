@@ -83,7 +83,7 @@ clean() {
 	echo "Cleaned QEMU build output under $BUILD_ROOT"
 }
 
-install() {
+install_qemu() {
 	# Ensure QEMU is configured and built, then install to the configured
 	# prefix (default /usr/local). Building runs as the current user; only the
 	# install step needs elevated privileges for a system prefix.
@@ -107,7 +107,7 @@ mkdir -p "$BUILD_ROOT"
 CMD="${1:-build}"
 case "$CMD" in
 	build)   build ;;
-	install) install ;;
+	install) install_qemu ;;
 	clean)   clean ;;
 	*)
 		echo "Error: unrecognized command - $CMD" >&2
