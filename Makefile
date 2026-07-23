@@ -11,7 +11,7 @@
 # The VM image is composed with mkosi from image/fedora and embeds both plane
 # kernels into the UKI initrd.
 
-.PHONY: kernel kernel-install kernel-clean qemu qemu-install qemu-clean image image-clean
+.PHONY: kernel kernel-install kernel-clean secure-kernel qemu qemu-install qemu-clean image image-clean
 
 # Build artifacts used as file-based prerequisites for 'image'. Depending on
 # these files (not the .PHONY targets) means Make skips them when they already
@@ -37,6 +37,15 @@ kernel-install:
 
 kernel-clean:
 	./scripts/build-kernel.sh clean
+
+# --- Secure kernel (standalone minimal Plane 1 kernel) ----------------------
+# Builds a minimal, self-contained secure-plane (Plane 1) kernel from an
+# x86_64_defconfig base with an embedded initramfs, via
+# components/secure-kernel/build-sk.sh. Artifacts go in
+# components/secure-kernel/build-sk (bzImage, vmlinux, vmlinux.bin). This is an
+# alternative to reusing the main 'kernel' vmlinux as the plane-1 payload.
+secure-kernel:
+	./components/secure-kernel/build-sk.sh
 
 # --- QEMU -------------------------------------------------------------------
 # Build QEMU out-of-tree; stage emulator binaries in build/qemu.
