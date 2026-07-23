@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE_DIR="$SCRIPT_DIR/../image"
+IMAGE_DIR="$SCRIPT_DIR/../../../../../image/fedora"
 
 PLANE0_KERNEL_DEFAULT="$IMAGE_DIR/fedora-kvm.vmlinuz"
 PLANE0_INITRD_DEFAULT="$IMAGE_DIR/fedora-kvm.initrd"

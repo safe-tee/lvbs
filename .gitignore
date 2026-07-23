@@ -237,5 +237,8 @@ test/mkosi-kvm/fedora-kvm.manifest
 test/mkosi-kvm/fedora-kvm.raw
 test/mkosi-kvm/fedora-kvm.vmlinuz
 
+# OVMF variable store is staged at VM launch by test/qemu/get-firmware-vars.sh.
+test/qemu/OVMF_VARS_4M.qcow2
+
 Makefile.in
 **/*/Makefile.in

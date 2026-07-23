@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-IMAGE_DIR="$SCRIPT_DIR/../../image"
+IMAGE_DIR="$SCRIPT_DIR/../../image/fedora"
 
 PLANE0_DISK="${PLANE0_DISK:-$IMAGE_DIR/fedora-kvm.raw}"
 ENABLE_PLANES="${ENABLE_PLANES:-1}"
@@ -27,7 +27,7 @@ else
     PLANE1_SERIAL=""
 fi
 BIOS="${BIOS:-/usr/share/edk2/ovmf/OVMF_CODE_4M.qcow2}"
-OVMF_VARS="${OVMF_VARS:-$IMAGE_DIR/OVMF_VARS_4M.qcow2}"
+OVMF_VARS="${OVMF_VARS:-$SCRIPT_DIR/OVMF_VARS_4M.qcow2}"
 
 usage() {
     cat <<EOF

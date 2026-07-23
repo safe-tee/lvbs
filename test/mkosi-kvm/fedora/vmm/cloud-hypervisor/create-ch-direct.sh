@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE_DIR="$SCRIPT_DIR/../image"
+IMAGE_DIR="$SCRIPT_DIR/../../../../../image/fedora"
 
 cloud-hypervisor \
     --kernel "$IMAGE_DIR/fedora-kvm.vmlinuz" \

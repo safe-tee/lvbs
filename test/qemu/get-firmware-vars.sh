@@ -1,11 +1,12 @@
 #!/bin/bash
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE_DIR="$SCRIPT_DIR/../../image"
 
 VARS_FILE=OVMF_VARS_4M.qcow2
 SRC="/usr/share/edk2/ovmf/$VARS_FILE"
-DST="$IMAGE_DIR/$VARS_FILE"
+# Per-VM writable NVRAM store lives next to the launch scripts (runtime
+# artifact, not part of the mkosi image source under image/fedora).
+DST="$SCRIPT_DIR/$VARS_FILE"
 
 if [ ! -f "$SRC" ]; then
     echo "Error: $SRC not found" >&2

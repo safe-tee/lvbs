@@ -68,10 +68,7 @@ Notes:
 
 ## Build Folder Manifest
 
-1. image -- where the VM image is composed (mkosi.conf, mkosi.extra, mkosi.repart)
-2. scripts -- build scripts (build-image.sh, build-vmlinux-bin-loader.sh)
-3. vmm/cloud-hypervisor -- orchestration through cloud-hypervisor
-
-QEMU orchestration lives at the repo-root `test/qemu` (create-vm.sh,
-get-firmware-vars.sh).
+1. image -- where the VM image is composed
+2. vmm/cloud-hypervisor -- orchestration through cloud-hypervisor
+3. vmm/qemu -- orchestration through qemu
 

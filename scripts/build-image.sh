@@ -3,17 +3,27 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-LINUX_SRC_ROOT_DEFAULT="$HOME/workspaces/linux"
+# LVBS workspace root: this script lives at <lvbs>/scripts.
+LVBS_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# mkosi image directory (holds mkosi.conf, mkosi.extra, mkosi.repart).
+# Override with IMAGE_DIR to build a different image variant.
+IMAGE_DIR="${IMAGE_DIR:-$LVBS_ROOT/image/fedora}"
+
+# Plane 0 (VTL0) is the Linux kernel built out-of-tree by scripts/build-kernel.sh.
+LINUX_SRC_ROOT_DEFAULT="$HOME/workspaces/safe-tee/linux"
 LINUX_SRC_ROOT="${LINUX_SRC_ROOT:-$LINUX_SRC_ROOT_DEFAULT}"
 
-VTL0_BUILD_DIR_DEFAULT="$SCRIPT_DIR/../../../kernel/build"
-VTL1_BUILD_DIR_DEFAULT="$SCRIPT_DIR/../../../kernel/build-sk"
+VTL0_BUILD_DIR_DEFAULT="$LVBS_ROOT/build/kernel"
 VTL0_BUILD_DIR="${VTL0_BUILD_DIR:-$VTL0_BUILD_DIR_DEFAULT}"
-VTL1_BUILD_DIR="${VTL1_BUILD_DIR:-$VTL1_BUILD_DIR_DEFAULT}"
 
-# VTL0 uses a compressed bzImage, VTL1 uses an uncompressed vmlinux payload.
+# Plane 1 (VTL1) is the same Linux kernel built for plane 0, staged as the
+# uncompressed vmlinux ELF (matching PLANE_1_KERNEL_FORMAT=elf below) from the
+# same out-of-tree build directory.
+VTL1_KERNEL_SRC_DEFAULT="$VTL0_BUILD_DIR/vmlinux"
+
+# VTL0 uses a compressed bzImage; VTL1 is the uncompressed vmlinux ELF payload.
 VTL0_KERNEL_SRC_DEFAULT="$VTL0_BUILD_DIR/arch/x86/boot/bzImage"
-VTL1_KERNEL_SRC_DEFAULT="$VTL1_BUILD_DIR/vmlinux"
 VTL0_KERNEL_SRC="${VTL0_KERNEL_SRC:-$VTL0_KERNEL_SRC_DEFAULT}"
 VTL1_KERNEL_SRC="${VTL1_KERNEL_SRC:-$VTL1_KERNEL_SRC_DEFAULT}"
 
@@ -71,7 +81,27 @@ VTL1_CMDLINE="$VTL1_CMDLINE_DEFAULT"
 VTL1_INITRD_DEST_REL="boot/plane-${VTL1_TARGET_PLANE}/vmlinux"
 CONFIG_VM_PLANES_REL="config-vm-planes"
 DRACUT_CONF_REL="etc/dracut.conf.d/50-lvbs-vtl1.conf"
-MKOSI_EXTRA_DIR="$SCRIPT_DIR/mkosi.extra"
+MKOSI_EXTRA_DIR="$IMAGE_DIR/mkosi.extra"
+
+# Handle 'clean' before any build prerequisites are checked, so it works even
+# when the VTL0/VTL1 kernels have not been built.
+if [ "${1:-build}" = "clean" ]; then
+	echo "Cleaning image artifacts under $IMAGE_DIR..."
+	# Remove mkosi outputs (fedora-kvm.raw, .efi, .initrd, .vmlinuz, .manifest).
+	if command -v mkosi >/dev/null 2>&1; then
+		( cd "$IMAGE_DIR" && mkosi clean ) || true
+	fi
+	# Remove generated staging content (static mkosi.extra files are kept).
+	rm -rf "$MKOSI_EXTRA_DIR/usr/lib/lvbs"
+	rm -rf "$MKOSI_EXTRA_DIR/usr/lib/modules"
+	rm -rf "$MKOSI_EXTRA_DIR/boot/plane-${VTL1_TARGET_PLANE}"
+	rm -f "$MKOSI_EXTRA_DIR/$CONFIG_VM_PLANES_REL"
+	rm -f "$MKOSI_EXTRA_DIR/etc/lvbs/config-vm-planes"
+	rm -f "$MKOSI_EXTRA_DIR/$DRACUT_CONF_REL"
+	rm -f "$IMAGE_DIR/vm-planes-initrd.cpio"
+	echo "Clean complete."
+	exit 0
+fi
 
 if ! command -v mkosi >/dev/null 2>&1; then
 	echo "Error: mkosi is not installed or not in PATH"
@@ -91,13 +121,14 @@ if [ ! -f "$VTL0_KERNEL_SRC" ]; then
 fi
 
 if [ ! -f "$VTL1_KERNEL_SRC" ]; then
-	echo "Error: VTL1 kernel not found: $VTL1_KERNEL_SRC"
-	exit 1
+        echo "Error: VTL1 kernel (uncompressed vmlinux) not found: $VTL1_KERNEL_SRC"
+        echo "Build it first: (cd $LVBS_ROOT && make kernel)"
+        exit 1
 fi
 
 VTL0_KREL="$(make -s -C "$LINUX_SRC_ROOT" O="$VTL0_BUILD_DIR" kernelrelease)"
-VTL1_KREL="$(make -s -C "$LINUX_SRC_ROOT" O="$VTL1_BUILD_DIR" kernelrelease)"
-
+# Plane 1 is the same Linux kernel, so it shares plane 0's kernelrelease.
+VTL1_KREL="$VTL0_KREL"
 # Only clear generated plane artifacts so static files under mkosi.extra survive.
 rm -rf "$MKOSI_EXTRA_DIR/usr/lib/lvbs"
 rm -rf "$MKOSI_EXTRA_DIR/usr/lib/modules"
@@ -202,7 +233,7 @@ echo "[INSTRUMENTATION] VTL0 kernel (compressed bzImage):"
 echo "[INSTRUMENTATION]   Source: $VTL0_KERNEL_SRC"
 echo "[INSTRUMENTATION]   Size: $(stat -c%s "$VTL0_KERNEL_SRC") bytes"
 echo "[INSTRUMENTATION]   SHA256: $VTL0_SHA256"
-echo "[INSTRUMENTATION] VTL1 kernel (uncompressed vmlinux):"
+echo "[INSTRUMENTATION] VTL1 payload (uncompressed vmlinux):"
 echo "[INSTRUMENTATION]   Source: $VTL1_KERNEL_SRC"
 echo "[INSTRUMENTATION]   Initrd path: /$VTL1_INITRD_DEST_REL"
 echo "[INSTRUMENTATION]   Size: $(stat -c%s "$MKOSI_EXTRA_DIR/$VTL1_INITRD_DEST_REL") bytes"
@@ -217,7 +248,7 @@ echo ""
 echo "========== KERNEL STAGING SUMMARY =========="
 echo "Staged kernels for image build:"
 echo "  VTL0 source kernel (Plane 0 - compressed bzImage): $VTL0_KERNEL_SRC"
-echo "  VTL1 source kernel (Plane 1 - uncompressed vmlinux): $VTL1_KERNEL_SRC"
+echo "  VTL1 source payload (Plane 1 - uncompressed vmlinux): $VTL1_KERNEL_SRC"
 echo "  VTL1 staged for initrd: $VTL1_KERNEL_SRC -> /$VTL1_INITRD_DEST_REL"
 echo "    Target plane: $VTL1_TARGET_PLANE"
 echo "    Load offset: $VTL1_LOAD_OFFSET"
@@ -232,7 +263,7 @@ echo "[INSTRUMENTATION] Dracut configuration for VTL1 embedding:"
 cat "$MKOSI_EXTRA_DIR/$DRACUT_CONF_REL"
 echo ""
 echo "Building vm-planes initrd cpio with config and kernel payload..."
-VM_PLANES_INITRD="$SCRIPT_DIR/vm-planes-initrd.cpio"
+VM_PLANES_INITRD="$IMAGE_DIR/vm-planes-initrd.cpio"
 VM_PLANES_INITRD_STAGING="$(mktemp -d)"
 mkdir -p "$VM_PLANES_INITRD_STAGING/boot/plane-${VTL1_TARGET_PLANE}"
 cp -f "$MKOSI_EXTRA_DIR/$CONFIG_VM_PLANES_REL" "$VM_PLANES_INITRD_STAGING/$CONFIG_VM_PLANES_REL"
@@ -244,13 +275,13 @@ echo "  Created $VM_PLANES_INITRD ($(du -sh "$VM_PLANES_INITRD" | cut -f1))"
 echo ""
 echo "Building fedora-kvm.raw with mkosi..."
 (
-	cd "$SCRIPT_DIR"
+	cd "$IMAGE_DIR"
 	mkosi --force build
 )
 
 echo ""
 echo "========== BUILD COMPLETE =========="
-echo "Build complete: $SCRIPT_DIR/fedora-kvm.raw"
+echo "Build complete: $IMAGE_DIR/fedora-kvm.raw"
 echo "Plane kernel payloads embedded in initrd:"
 echo "  /$VTL1_INITRD_DEST_REL (VTL1 / Plane 1 - uncompressed)"
 echo ""
