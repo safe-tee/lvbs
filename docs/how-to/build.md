@@ -172,7 +172,8 @@ kernel in that it:
 make secure-kernel
 ```
 
-Artifacts are written under `components/secure-kernel/build-sk/`:
+Artifacts are written under `build/secure-kernel/` at the repo root (mirroring
+the main kernel's `build/kernel`):
 
 - `bzImage` — compressed image.
 - `vmlinux` — uncompressed ELF.
@@ -182,7 +183,7 @@ Artifacts are written under `components/secure-kernel/build-sk/`:
 The build is incremental. To rebuild from scratch, remove the output directory:
 
 ```bash
-rm -rf components/secure-kernel/build-sk
+make secure-kernel-clean
 ```
 
 > The secure kernel build reuses the shared `linux` source tree. Override the
@@ -318,11 +319,10 @@ make qemu-clean      # remove the QEMU build dir and staged binaries
 make image-clean     # remove mkosi outputs and generated staging content
 ```
 
-The standalone secure kernel has no clean target; remove its output directory
-directly:
+The standalone secure kernel is cleaned with its own target:
 
 ```bash
-rm -rf components/secure-kernel/build-sk
+make secure-kernel-clean
 ```
 
 ## Quick reference
@@ -342,7 +342,7 @@ make qemu            # qemu-system-x86_64
 make image           # fedora-kvm.raw
 
 # Optional: standalone minimal plane-1 kernel (dev/debug only)
-make secure-kernel   # components/secure-kernel/build-sk/{bzImage,vmlinux,vmlinux.bin}
+make secure-kernel   # build/secure-kernel/{bzImage,vmlinux,vmlinux.bin}
 
 # Run
 export PATH="$PWD/build/qemu:$PATH"

@@ -3,7 +3,32 @@
 SCRIPTS_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 . "$SCRIPTS_DIR/common.sh"
 
-BUILD_ROOT="$SCRIPTS_DIR/build-sk"
+# LVBS repo root (components/secure-kernel -> ../..). Out-of-tree build
+# artifacts are staged under <lvbs>/build/secure-kernel, mirroring the main
+# kernel's <lvbs>/build/kernel, so the sources and component dir stay clean.
+LVBS_ROOT="$( cd "$SCRIPTS_DIR/../.." &> /dev/null && pwd )"
+BUILD_ROOT="${BUILD_ROOT:-$LVBS_ROOT/build/secure-kernel}"
+INITRAMFS_DIR="$SCRIPTS_DIR/initramfs-sk"
+
+CMD="${1:-build}"
+
+if [ "$CMD" = clean ]; then
+	# Remove the out-of-tree kbuild artifacts (keeps the generated .config so a
+	# subsequent build reuses the layered secure-plane config), the objcopy'd
+	# raw binary, and the compiled static init.
+	if [ -f "$BUILD_ROOT/.config" ]; then
+		make -C "$LINUX_SRC_ROOT" O="$BUILD_ROOT" clean
+	fi
+	rm -f "$BUILD_ROOT/vmlinux.bin"
+	rm -f "$INITRAMFS_DIR/init"
+	echo "[build-sk] cleaned secure-kernel build artifacts"
+	exit 0
+elif [ "$CMD" != build ]; then
+	echo "[build-sk] Error: unrecognized command - $CMD" >&2
+	echo "Usage: $0 [build|clean]" >&2
+	exit 1
+fi
+
 mkdir -p "$BUILD_ROOT"
 
 if [ ! -f "$BUILD_ROOT/.config" ]; then
@@ -39,7 +64,6 @@ set_kconfig_bool CONFIG_XEN_PVH y
 
 # Embed a minimal initramfs so Plane 1 can boot without an external rootfs.
 # The initramfs contains a statically linked /init that keeps the kernel running.
-INITRAMFS_DIR="$SCRIPTS_DIR/initramfs-sk"
 mkdir -p "$INITRAMFS_DIR"/{dev,proc,sys}
 
 # Build a static init binary (no libc dependency)

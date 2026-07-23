@@ -17,10 +17,13 @@ LINUX_SRC_ROOT="${LINUX_SRC_ROOT:-$LINUX_SRC_ROOT_DEFAULT}"
 VTL0_BUILD_DIR_DEFAULT="$LVBS_ROOT/build/kernel"
 VTL0_BUILD_DIR="${VTL0_BUILD_DIR:-$VTL0_BUILD_DIR_DEFAULT}"
 
-# Plane 1 (VTL1) is the same Linux kernel built for plane 0, staged as the
-# uncompressed vmlinux ELF (matching PLANE_1_KERNEL_FORMAT=elf below) from the
-# same out-of-tree build directory.
-VTL1_KERNEL_SRC_DEFAULT="$VTL0_BUILD_DIR/vmlinux"
+# Plane 1 (VTL1) is the standalone minimal secure-plane kernel built by
+# components/secure-kernel/build-sk.sh, staged as the uncompressed vmlinux ELF
+# (matching PLANE_1_KERNEL_FORMAT=elf below) under build/secure-kernel (mirroring
+# the plane-0 build/kernel layout).
+SK_BUILD_DIR_DEFAULT="$LVBS_ROOT/build/secure-kernel"
+SK_BUILD_DIR="${SK_BUILD_DIR:-$SK_BUILD_DIR_DEFAULT}"
+VTL1_KERNEL_SRC_DEFAULT="$SK_BUILD_DIR/vmlinux"
 
 # VTL0 uses a compressed bzImage; VTL1 is the uncompressed vmlinux ELF payload.
 VTL0_KERNEL_SRC_DEFAULT="$VTL0_BUILD_DIR/arch/x86/boot/bzImage"
@@ -122,7 +125,7 @@ fi
 
 if [ ! -f "$VTL1_KERNEL_SRC" ]; then
         echo "Error: VTL1 kernel (uncompressed vmlinux) not found: $VTL1_KERNEL_SRC"
-        echo "Build it first: (cd $LVBS_ROOT && make kernel)"
+        echo "Build it first: (cd $LVBS_ROOT && make secure-kernel)"
         exit 1
 fi
 
