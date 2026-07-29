@@ -12,7 +12,7 @@
 # The VM image is composed with mkosi from image/fedora and embeds both plane
 # kernels into the UKI initrd.
 
-.PHONY: kernel kernel-install kernel-clean secure-kernel secure-kernel-clean qemu qemu-install qemu-clean image image-clean
+.PHONY: kernel kernel-install kernel-clean secure-kernel secure-kernel-clean qemu qemu-install qemu-clean image image-clean kvm-self-tests run-kvm-self-tests kvm-self-tests-clean
 
 # Build artifacts used as file-based prerequisites for 'image'. Depending on
 # these files (not the .PHONY targets) means Make skips them when they already
@@ -85,3 +85,16 @@ image: $(KERNEL_BZIMAGE) $(SK_VMLINUX)
 
 image-clean:
 	./scripts/build-image.sh clean
+
+# --- KVM selftests ----------------------------------------------------------
+# Build/run the in-kernel KVM selftests (tools/testing/selftests/kvm) out-of-tree
+# into build/kvm-tests, reusing the plane-0 kernel headers in build/kernel.
+# 'run-kvm-self-tests' must run on a KVM-capable host (/dev/kvm).
+kvm-self-tests:
+	./scripts/build-kvm-tests.sh build
+
+run-kvm-self-tests:
+	./scripts/build-kvm-tests.sh run
+
+kvm-self-tests-clean:
+	./scripts/build-kvm-tests.sh clean
