@@ -9,7 +9,7 @@ PLANE0_DISK="${PLANE0_DISK:-$IMAGE_DIR/fedora-kvm.raw}"
 ENABLE_PLANES="${ENABLE_PLANES:-1}"
 MEMORY_SIZE="${MEMORY_SIZE:-4G}"
 # Plane-0 vCPU count.
-SMP="${SMP:-3}"
+SMP="${SMP:-2}"
 # Keep total VM vCPU capacity unchanged by default.
 # Plane vCPUs are created per plane using existing plane-0 vCPU IDs.
 MAXCPUS="${MAXCPUS:-$SMP}"
