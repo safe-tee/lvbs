@@ -1,0 +1,29 @@
+From 7a0da65ff2d2906ec73f8db5b654fade8efcde00 Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@microsoft.com>
+Date: Tue, 17 Mar 2026 14:13:01 -0700
+Subject: [RFC PATCH v1 01/42] Fix merge issue - Remove duplicate definition
+ for kvm_arch_has_irq_bypass
+
+---
+ arch/x86/include/asm/kvm_host.h | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index 979d1749f176..b7d478dcc1a5 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -2603,11 +2603,6 @@ static inline bool kvm_arch_has_irq_bypass(void)
+ 	return enable_device_posted_irqs;
+ }
+ 
+-static inline bool kvm_arch_has_irq_bypass(void)
+-{
+-	return enable_device_posted_irqs;
+-}
+-
+ int kvm_arch_nr_vcpu_planes(struct kvm *kvm);
+ bool kvm_arch_planes_share_fpu(struct kvm *kvm);
+ 
+-- 
+2.55.0
+

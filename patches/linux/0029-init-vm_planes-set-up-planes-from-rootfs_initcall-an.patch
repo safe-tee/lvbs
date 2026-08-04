@@ -1,0 +1,242 @@
+From 1c8b850a813e795c52369fc223498b13f08221a3 Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@linux.microsoft.com>
+Date: Wed, 17 Jun 2026 17:13:06 -0700
+Subject: [RFC PATCH v1 29/42] init/vm_planes: set up planes from
+ rootfs_initcall and load ELF payloads
+
+Move plane setup out of start_kernel()/kernel_init_freeable() and into a
+self-registering rootfs_initcall. Link vm_planes.o after initramfs.o so
+populate_rootfs() has unpacked the initramfs (which carries the
+config-vm-planes file and the plane kernels) before arch_init_vm_planes()
+runs. arch_init_vm_planes() becomes static and no longer needs a
+declaration in vm_planes.h.
+
+Also load the plane kernels as ELF payloads, copying loadable segments
+into the reserved plane memory and zeroing the BSS, replacing the
+early_ioremap path with a plain io.h mapping.
+
+Signed-off-by: Sriram Nambakam <snambakam@linux.microsoft.com>
+---
+ include/linux/vm_planes.h |  1 -
+ init/Kconfig              |  5 ++-
+ init/Makefile             |  5 ++-
+ init/main.c               |  4 --
+ init/vm_planes.c          | 88 +++++++++++++++++++++------------------
+ 5 files changed, 54 insertions(+), 49 deletions(-)
+
+diff --git a/include/linux/vm_planes.h b/include/linux/vm_planes.h
+index 1130557cf5aa..e33fa03d1d4a 100644
+--- a/include/linux/vm_planes.h
++++ b/include/linux/vm_planes.h
+@@ -25,7 +25,6 @@ struct vm_plane_config {
+ 	char cmdline[VM_PLANE_CMDLINE_MAX];
+ };
+ 
+-void __init arch_init_vm_planes(void);
+ int __init load_vm_plane_kernels(unsigned int plane_count,
+ 				 struct vm_plane_config *plane_cfg);
+ 
+diff --git a/init/Kconfig b/init/Kconfig
+index 23d9cca334ba..5d76fe852376 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1720,8 +1720,9 @@ config VM_PLANES
+ 	  Enable hypervisor enabled multi-kernel support.
+ 
+ 	  This allows processing the kernel command-line parameter
+-	  "enable-vm-planes" and, when requested, calling
+-	  arch_init_vm_planes() during start_kernel().
++	  "enable-vm-planes" and, when requested, setting up the configured
++	  planes from a rootfs_initcall (after the initramfs is populated and
++	  before device drivers and late_initcalls run).
+ 
+ 	  The initrd config-vm-planes file is expected to provide per-plane
+ 	  entries for PLANE_<id>_KERNEL, PLANE_<id>_LOAD_OFFSET, and
+diff --git a/init/Makefile b/init/Makefile
+index 113133c8cdd7..f6ac312f1e98 100644
+--- a/init/Makefile
++++ b/init/Makefile
+@@ -6,12 +6,15 @@
+ ccflags-y := -fno-function-sections -fno-data-sections
+ 
+ obj-y                          := main.o version.o mounts.o
+-obj-y                          += vm_planes.o
+ ifneq ($(CONFIG_BLK_DEV_INITRD),y)
+ obj-y                          += noinitramfs.o
+ else
+ obj-$(CONFIG_BLK_DEV_INITRD)   += initramfs.o
+ endif
++# vm_planes.o must link AFTER initramfs.o so that, at rootfs_initcall level,
++# populate_rootfs() (which unpacks the initramfs) runs before
++# arch_init_vm_planes() reads the plane config and kernels from the rootfs.
++obj-y                          += vm_planes.o
+ obj-$(CONFIG_GENERIC_CALIBRATE_DELAY) += calibrate.o
+ obj-$(CONFIG_INITRAMFS_TEST)   += initramfs_test.o
+ 
+diff --git a/init/main.c b/init/main.c
+index 1c779f6d60cc..be188e67c556 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -1663,10 +1663,6 @@ static noinline void __init kernel_init_freeable(void)
+ 	wait_for_initramfs();
+ 	console_on_rootfs();
+ 
+-#ifdef CONFIG_VM_PLANES
+-	arch_init_vm_planes();
+-#endif
+-
+ 	/*
+ 	 * check if there is an early userspace init.  If yes, let it do all
+ 	 * the work
+diff --git a/init/vm_planes.c b/init/vm_planes.c
+index 10c7facdb1af..64d5ff19a736 100644
+--- a/init/vm_planes.c
++++ b/init/vm_planes.c
+@@ -12,9 +12,9 @@
+ #include <linux/vm_planes.h>
+ #include <linux/elf.h>
+ #include <linux/mm.h>
++#include <linux/io.h>
+ #include <asm/cpu.h>
+ #include <asm/kvm_para.h>
+-#include <asm-generic/early_ioremap.h>
+ 
+ #ifdef CONFIG_VM_PLANES
+ static bool __initdata enable_vm_planes_requested;
+@@ -360,44 +360,29 @@ static int __init vm_planes_get_cfg(unsigned int *plane_count,
+ static int __init copy_to_early_mem(phys_addr_t dest, const void *src,
+ 				    unsigned long size)
+ {
+-	unsigned long slop, clen;
+-	char *p;
+-
+-	while (size) {
+-		slop = offset_in_page(dest);
+-		clen = size;
+-		if (clen > PAGE_SIZE - slop)
+-			clen = PAGE_SIZE - slop;
+-		p = early_memremap(dest & PAGE_MASK, clen + slop);
+-		if (!p)
+-			return -ENOMEM;
+-		memcpy(p + slop, src, clen);
+-		early_memunmap(p, clen + slop);
+-		dest += clen;
+-		src += clen;
+-		size -= clen;
+-	}
++	void *p;
++
++	if (!size)
++		return 0;
++	p = memremap(dest, size, MEMREMAP_WB);
++	if (!p)
++		return -ENOMEM;
++	memcpy(p, src, size);
++	memunmap(p);
+ 	return 0;
+ }
+ 
+ static int __init zero_early_mem(phys_addr_t dest, unsigned long size)
+ {
+-	unsigned long slop, clen;
+-	char *p;
+-
+-	while (size) {
+-		slop = offset_in_page(dest);
+-		clen = size;
+-		if (clen > PAGE_SIZE - slop)
+-			clen = PAGE_SIZE - slop;
+-		p = early_memremap(dest & PAGE_MASK, clen + slop);
+-		if (!p)
+-			return -ENOMEM;
+-		memset(p + slop, 0, clen);
+-		early_memunmap(p, clen + slop);
+-		dest += clen;
+-		size -= clen;
+-	}
++	void *p;
++
++	if (!size)
++		return 0;
++	p = memremap(dest, size, MEMREMAP_WB);
++	if (!p)
++		return -ENOMEM;
++	memset(p, 0, size);
++	memunmap(p);
+ 	return 0;
+ }
+ 
+@@ -616,23 +601,41 @@ int __init __weak alloc_vm_planes(unsigned int plane_count,
+ int __init __weak activate_vm_planes(unsigned int plane_count,
+ 				      struct vm_plane_config *plane_cfg) { return -ENOSYS; }
+ 
+-void __init arch_init_vm_planes(void)
++/*
++ * Set up VM planes during boot.
++ *
++ * This must run after the initramfs is populated (it reads the plane config
++ * and plane kernels from the rootfs) and, crucially, *before* any consumer
++ * that issues a plane switch -- in particular the VBS backend init/seal, and
++ * before any device driver, module, or userspace can touch a plane.  A
++ * rootfs_initcall satisfies all of these: it runs immediately after
++ * populate_rootfs() (initramfs ready) and before every device_initcall and
++ * late_initcall.  Because init/ links before security/, this also runs before
++ * the VBS probe/HEKI rootfs_initcalls, so the secure plane vcpu exists by the
++ * time the first VTL call is issued.
++ */
++static int __init arch_init_vm_planes(void)
+ {
+ 	unsigned int plane_count = VM_PLANES_DEFAULT_COUNT;
+ 	struct vm_plane_config *plane_cfg;
+ 	int ret;
+ 
+ 	if (!enable_vm_planes_requested)
+-		return;
++		return 0;
+ 
+-	if (!kvm_para_available())
+-		return;
++	/* Ensure any asynchronous initramfs unpacking has completed. */
++	wait_for_initramfs();
++
++	if (!kvm_para_available()) {
++		pr_info("vm_planes: KVM paravirt unavailable, skipping plane setup\n");
++		return 0;
++	}
+ 
+ 	ret = vm_planes_get_cfg(&plane_count, &plane_cfg);
+ 	if (ret) {
+ 		pr_warn("vm_planes: failed to parse %s: %d\n",
+ 			VM_PLANES_CONFIG_FILE, ret);
+-		return;
++		return 0;
+ 	}
+ 
+ 	pr_info("vm_planes: enabling %u planes (ids 0..%u)\n",
+@@ -641,18 +644,21 @@ void __init arch_init_vm_planes(void)
+ 	ret = alloc_vm_planes(plane_count, plane_cfg);
+ 	if (ret) {
+ 		pr_err("vm_planes: failed to allocate planes: %d\n", ret);
+-		return;
++		return 0;
+ 	}
+ 
+ 	ret = load_vm_plane_kernels(plane_count, plane_cfg);
+ 	if (ret) {
+ 		pr_err("vm_planes: failed to load plane kernels: %d\n", ret);
+-		return;
++		return 0;
+ 	}
+ 
+ 	ret = activate_vm_planes(plane_count, plane_cfg);
+ 	if (ret)
+ 		pr_err("vm_planes: failed to activate planes: %d\n", ret);
++
++	return 0;
+ }
++rootfs_initcall(arch_init_vm_planes);
+ 
+ #endif /* CONFIG_VM_PLANES */
+-- 
+2.55.0
+

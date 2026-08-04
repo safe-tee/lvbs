@@ -1,0 +1,53 @@
+From f0b47365a4e67f64a9c4956349b98abba02ce621 Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@linux.microsoft.com>
+Date: Tue, 28 Jul 2026 23:34:02 -0700
+Subject: [RFC PATCH v1 40/42] kvm: x86: use kvm_vcpu scheduling-state
+ accessors and struct stat fields
+
+Finish the conversion begun by the kvm_vcpu_common rework: read
+wants_to_run through kvm_vcpu_wants_to_run() and account statistics via
+the embedded vcpu->stat.* fields (not the removed vcpu->stat-> pointer)
+in the SVM and nested-VMX paths.
+---
+ arch/x86/kvm/svm/svm.c    | 4 ++--
+ arch/x86/kvm/vmx/nested.c | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index 73d80f442a49..44abbd629a66 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -2816,7 +2816,7 @@ static bool svm_pat_accesses_gpat(struct kvm_vcpu *vcpu, bool from_host)
+ 	 * KVM_GET/SET_NESTED_STATE are independent of each other and can
+ 	 * be ordered arbitrarily during save and restore.
+ 	 */
+-	WARN_ON_ONCE(from_host && vcpu->wants_to_run);
++	WARN_ON_ONCE(from_host && kvm_vcpu_wants_to_run(vcpu));
+ 	return !from_host && is_guest_mode(vcpu) && l2_has_separate_pat(vcpu);
+ }
+ 
+@@ -3240,7 +3240,7 @@ static int interrupt_window_interception(struct kvm_vcpu *vcpu)
+ 	kvm_make_request(KVM_REQ_EVENT, vcpu);
+ 	svm_clear_vintr(to_svm(vcpu));
+ 
+-	++vcpu->stat->irq_window_exits;
++	++vcpu->stat.irq_window_exits;
+ 	return 1;
+ }
+ 
+diff --git a/arch/x86/kvm/vmx/nested.c b/arch/x86/kvm/vmx/nested.c
+index ddf6df7bee93..2f504fa2e09a 100644
+--- a/arch/x86/kvm/vmx/nested.c
++++ b/arch/x86/kvm/vmx/nested.c
+@@ -619,7 +619,7 @@ static int nested_vmx_check_tpr_shadow_controls(struct kvm_vcpu *vcpu,
+ 	 * and only perform the check when in KVM_RUN, to avoid a false failure
+ 	 * if userspace hasn't yet configured memslots during state restore.
+ 	 */
+-	if (warn_on_missed_cc && vcpu->wants_to_run &&
++	if (warn_on_missed_cc && kvm_vcpu_wants_to_run(vcpu) &&
+ 	    nested_cpu_has(vmcs12, CPU_BASED_TPR_SHADOW) &&
+ 	    !nested_cpu_has_vid(vmcs12) &&
+ 	    !nested_cpu_has2(vmcs12, SECONDARY_EXEC_VIRTUALIZE_APIC_ACCESSES) &&
+-- 
+2.55.0
+

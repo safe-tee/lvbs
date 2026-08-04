@@ -1,0 +1,75 @@
+From 3c77ed26ea746d939d0d658c3689655a56866fcd Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@linux.microsoft.com>
+Date: Wed, 17 Jun 2026 17:13:34 -0700
+Subject: [RFC PATCH v1 30/42] security/vbs: run backend probe and HEKI seal at
+ rootfs_initcall
+
+Move VBS backend probing (vbs_probe_init) from device_initcall and the
+HEKI kernel seal (vbs_heki_late_init) from late_initcall to
+rootfs_initcall, and link probe.o before core.o so the backend is
+registered before the seal runs. At this level the initramfs is
+unpacked and the VM planes have been set up (init/ links before
+security/), but device drivers, modules and userspace have not started
+yet, so the kernel is sealed before anything that could tamper with it
+runs.
+
+Signed-off-by: Sriram Nambakam <snambakam@linux.microsoft.com>
+---
+ security/vbs/Makefile | 5 ++++-
+ security/vbs/core.c   | 9 ++++++++-
+ security/vbs/probe.c  | 9 +++++----
+ 3 files changed, 17 insertions(+), 6 deletions(-)
+
+diff --git a/security/vbs/Makefile b/security/vbs/Makefile
+index e33052ccde2d..01e831e28ac7 100644
+--- a/security/vbs/Makefile
++++ b/security/vbs/Makefile
+@@ -1,6 +1,9 @@
+ # SPDX-License-Identifier: GPL-2.0-only
+ obj-$(CONFIG_VBS) += vbs.o
+-vbs-y := core.o probe.o
++# probe.o must link before core.o so that, at rootfs_initcall level, the
++# backend is registered (vbs_probe_init) before the HEKI seal runs
++# (vbs_heki_late_init in core.o).
++vbs-y := probe.o core.o
+ 
+ vbs-$(CONFIG_VBS_HEKI)		+= heki.o
+ obj-$(CONFIG_VBS_KVM_PLANES)	+= kvm_planes.o
+diff --git a/security/vbs/core.c b/security/vbs/core.c
+index 16b5329964f9..1167026fc7d1 100644
+--- a/security/vbs/core.c
++++ b/security/vbs/core.c
+@@ -195,4 +195,11 @@ static int __init vbs_heki_late_init(void)
+ 
+ 	return 0;
+ }
+-late_initcall(vbs_heki_late_init);
++/*
++ * Run at rootfs_initcall level (after vbs_probe_init in probe.o, which links
++ * first) so the kernel is sealed before any device driver, module, or
++ * userspace runs.  The secure plane vcpu already exists by this point because
++ * arch_init_vm_planes() (init/, links before security/) ran earlier in the
++ * same initcall level.
++ */
++rootfs_initcall(vbs_heki_late_init);
+diff --git a/security/vbs/probe.c b/security/vbs/probe.c
+index 292f3663a996..14aa3d59310b 100644
+--- a/security/vbs/probe.c
++++ b/security/vbs/probe.c
+@@ -96,8 +96,9 @@ static int __init vbs_probe_init(void)
+ }
+ 
+ /*
+- * Run at device_initcall level: platform detection (CPUID, MSRs, SMCCC)
+- * is complete by this point, but subsystems that consume VBS (module
+- * loading, HEKI) have not yet started.
++ * Run at rootfs_initcall level: platform detection (CPUID, MSRs, SMCCC)
++ * is complete by this point, the VM planes have been set up (init/ links
++ * before security/), and subsystems that consume VBS (module loading, HEKI,
++ * device drivers, userspace) have not yet started.
+  */
+-device_initcall(vbs_probe_init);
++rootfs_initcall(vbs_probe_init);
+-- 
+2.55.0
+

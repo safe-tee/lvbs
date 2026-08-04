@@ -1,0 +1,146 @@
+From 7bec1661525f8c3a16fed826a5907756e0985f3a Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@linux.microsoft.com>
+Date: Tue, 28 Jul 2026 23:33:53 -0700
+Subject: [RFC PATCH v1 39/42] kvm: arch: finalize plane hooks and
+ kvm_arch_vcpu_create signature
+
+Match the vm-planes-merged tree on non-x86 architectures: revert
+kvm_arch_vcpu_create() to its plane-less prototype (planes attach the
+vCPU to plane 0 in generic code) and add the kvm_arch_init_plane/
+kvm_arch_free_plane/kvm_arch_sync_events stubs without the stray
+conflict markers that the integration branch left committed.
+---
+ arch/arm64/include/asm/kvm_host.h   | 7 +++++++
+ arch/arm64/kvm/arm.c                | 2 +-
+ arch/mips/include/asm/kvm_host.h    | 6 ++++++
+ arch/powerpc/include/asm/kvm_host.h | 6 ++++++
+ arch/riscv/kvm/vcpu.c               | 2 +-
+ arch/s390/include/asm/kvm_host.h    | 6 ++++++
+ 6 files changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm64/include/asm/kvm_host.h b/arch/arm64/include/asm/kvm_host.h
+index d3807b6535cc..75b4e52c4bac 100644
+--- a/arch/arm64/include/asm/kvm_host.h
++++ b/arch/arm64/include/asm/kvm_host.h
+@@ -237,6 +237,9 @@ struct kvm_s2_mmu {
+ struct kvm_arch_memory_slot {
+ };
+ 
++struct kvm_arch_plane {
++};
++
+ /**
+  * struct kvm_smccc_features: Descriptor of the hypercall services exposed to the guests
+  *
+@@ -1441,6 +1444,10 @@ static inline bool kvm_system_needs_idmapped_vectors(void)
+ 	return cpus_have_final_cap(ARM64_SPECTRE_V3A);
+ }
+ 
++static inline void kvm_arch_init_plane(struct kvm_plane *plane) {}
++static inline void kvm_arch_free_plane(struct kvm_plane *plane) {}
++static inline void kvm_arch_sync_events(struct kvm *kvm) {}
++
+ void kvm_init_host_debug_data(void);
+ void kvm_debug_init_vhe(void);
+ void kvm_vcpu_load_debug(struct kvm_vcpu *vcpu);
+diff --git a/arch/arm64/kvm/arm.c b/arch/arm64/kvm/arm.c
+index d55be436bf16..c02e19fe2b48 100644
+--- a/arch/arm64/kvm/arm.c
++++ b/arch/arm64/kvm/arm.c
+@@ -538,7 +538,7 @@ int kvm_arch_vcpu_precreate(struct kvm *kvm, unsigned int id)
+ 	return 0;
+ }
+ 
+-int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu, struct kvm_plane *plane)
++int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
+ {
+ 	int err;
+ 
+diff --git a/arch/mips/include/asm/kvm_host.h b/arch/mips/include/asm/kvm_host.h
+index c48bca79207b..8dc465dd9ea8 100644
+--- a/arch/mips/include/asm/kvm_host.h
++++ b/arch/mips/include/asm/kvm_host.h
+@@ -147,6 +147,9 @@ struct kvm_vcpu_stat {
+ struct kvm_arch_memory_slot {
+ };
+ 
++struct kvm_arch_plane {
++};
++
+ #ifdef CONFIG_CPU_LOONGSON64
+ struct ipi_state {
+ 	uint32_t status;
+@@ -903,6 +906,9 @@ extern unsigned long kvm_mips_get_ramsize(struct kvm *kvm);
+ extern int kvm_vcpu_ioctl_interrupt(struct kvm_vcpu *vcpu,
+ 			     struct kvm_mips_interrupt *irq);
+ 
++static inline void kvm_arch_init_plane(struct kvm_plane *plane) {}
++static inline void kvm_arch_free_plane(struct kvm_plane *plane) {}
++static inline void kvm_arch_sync_events(struct kvm *kvm) {}
+ static inline void kvm_arch_free_memslot(struct kvm *kvm,
+ 					 struct kvm_memory_slot *slot) {}
+ static inline void kvm_arch_memslots_updated(struct kvm *kvm, u64 gen) {}
+diff --git a/arch/powerpc/include/asm/kvm_host.h b/arch/powerpc/include/asm/kvm_host.h
+index 47d9900c4f85..5d7036888933 100644
+--- a/arch/powerpc/include/asm/kvm_host.h
++++ b/arch/powerpc/include/asm/kvm_host.h
+@@ -256,6 +256,9 @@ struct kvm_arch_memory_slot {
+ #endif /* CONFIG_KVM_BOOK3S_HV_POSSIBLE */
+ };
+ 
++struct kvm_arch_plane {
++};
++
+ struct kvm_hpt_info {
+ 	/* Host virtual (linear mapping) address of guest HPT */
+ 	unsigned long virt;
+@@ -919,6 +922,9 @@ struct kvm_vcpu_arch {
+ #define __KVM_HAVE_ARCH_WQP
+ #define __KVM_HAVE_CREATE_DEVICE
+ 
++static inline void kvm_arch_init_plane(struct kvm_plane *plane) {}
++static inline void kvm_arch_free_plane(struct kvm_plane *plane) {}
++static inline void kvm_arch_sync_events(struct kvm *kvm) {}
+ static inline void kvm_arch_memslots_updated(struct kvm *kvm, u64 gen) {}
+ static inline void kvm_arch_flush_shadow_all(struct kvm *kvm) {}
+ static inline void kvm_arch_vcpu_blocking(struct kvm_vcpu *vcpu) {}
+diff --git a/arch/riscv/kvm/vcpu.c b/arch/riscv/kvm/vcpu.c
+index f618cd83d19a..4d7ee4059758 100644
+--- a/arch/riscv/kvm/vcpu.c
++++ b/arch/riscv/kvm/vcpu.c
+@@ -129,7 +129,7 @@ int kvm_arch_vcpu_precreate(struct kvm *kvm, unsigned int id)
+ 	return 0;
+ }
+ 
+-int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu, struct kvm_plane *plane)
++int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
+ {
+ 	int rc;
+ 
+diff --git a/arch/s390/include/asm/kvm_host.h b/arch/s390/include/asm/kvm_host.h
+index 15c831304b51..423185a09de6 100644
+--- a/arch/s390/include/asm/kvm_host.h
++++ b/arch/s390/include/asm/kvm_host.h
+@@ -476,6 +476,9 @@ struct kvm_vm_stat {
+ struct kvm_arch_memory_slot {
+ };
+ 
++struct kvm_arch_plane {
++};
++
+ struct s390_map_info {
+ 	struct list_head list;
+ 	__u64 guest_addr;
+@@ -773,6 +776,9 @@ extern int kvm_s390_gisc_unregister(struct kvm *kvm, u32 gisc);
+ 
+ bool kvm_s390_is_gpa_in_memslot(struct kvm *kvm, gpa_t gpa);
+ 
++static inline void kvm_arch_init_plane(struct kvm_plane *plane) {}
++static inline void kvm_arch_free_plane(struct kvm_plane *plane) {}
++static inline void kvm_arch_sync_events(struct kvm *kvm) {}
+ static inline void kvm_arch_free_memslot(struct kvm *kvm,
+ 					 struct kvm_memory_slot *slot) {}
+ static inline void kvm_arch_memslots_updated(struct kvm *kvm, u64 gen) {}
+-- 
+2.55.0
+

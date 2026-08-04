@@ -1,0 +1,47 @@
+From 43ccabbf6620ae07aa54b3142d0f5a8d79f2d42f Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@linux.microsoft.com>
+Date: Tue, 2 Jun 2026 16:45:47 -0700
+Subject: [RFC PATCH v1 23/42] kvm: x86: fix merged plane API/stat build
+ regressions
+
+---
+ include/uapi/linux/kvm.h | 23 -----------------------
+ 1 file changed, 23 deletions(-)
+
+diff --git a/include/uapi/linux/kvm.h b/include/uapi/linux/kvm.h
+index dfc9c7dab21e..348628c7b17e 100644
+--- a/include/uapi/linux/kvm.h
++++ b/include/uapi/linux/kvm.h
+@@ -1689,29 +1689,6 @@ struct kvm_memory_attributes {
+ #define KVM_MEMORY_ATTRIBUTE_NO_WRITE          (1ULL << 4)
+ #define KVM_MEMORY_ATTRIBUTE_NO_EXEC           (1ULL << 5)
+ 
+-/*
+- * Per-plane memory protection attributes (VM planes / VBS).
+- * These control EPT R/W/X permissions enforced by the hypervisor on
+- * behalf of a higher-privilege plane (e.g., plane-1 restricting plane-0).
+- */
+-#define KVM_MEMORY_ATTRIBUTE_NO_WRITE          (1ULL << 4)
+-#define KVM_MEMORY_ATTRIBUTE_NO_EXEC           (1ULL << 5)
+-
+-/*
+- * Set memory attributes on a specific plane's address space.
+- * Used by a higher-privilege plane to restrict a lower-privilege plane's
+- * EPT permissions (e.g., plane-1 making plane-0 kernel text read-only).
+- */
+-struct kvm_plane_memory_attributes {
+-	__u32 plane;        /* target plane index                        */
+-	__u32 flags;        /* must be 0                                 */
+-	__u64 address;      /* GPA (page-aligned)                        */
+-	__u64 size;         /* size in bytes (page-aligned)              */
+-	__u64 attributes;   /* KVM_MEMORY_ATTRIBUTE_NO_WRITE / NO_EXEC   */
+-};
+-
+-#define KVM_SET_PLANE_MEMORY_ATTRIBUTES	_IOW(KVMIO, 0xd6, struct kvm_plane_memory_attributes)
+-
+ #define KVM_CREATE_GUEST_MEMFD	_IOWR(KVMIO,  0xd4, struct kvm_create_guest_memfd)
+ #define GUEST_MEMFD_FLAG_MMAP		(1ULL << 0)
+ #define GUEST_MEMFD_FLAG_INIT_SHARED	(1ULL << 1)
+-- 
+2.55.0
+

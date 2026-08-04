@@ -1,0 +1,39 @@
+From 7a45b77f0fcf884ac76b7d7a9ec97579dbdfb497 Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@microsoft.com>
+Date: Tue, 17 Mar 2026 16:37:04 -0700
+Subject: [RFC PATCH v1 04/42] Fix compile errors
+
+---
+ arch/x86/kvm/svm/avic.c | 2 +-
+ arch/x86/kvm/svm/sev.c  | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/kvm/svm/avic.c b/arch/x86/kvm/svm/avic.c
+index 58e493a80cb0..251e36f5f0f7 100644
+--- a/arch/x86/kvm/svm/avic.c
++++ b/arch/x86/kvm/svm/avic.c
+@@ -404,7 +404,7 @@ static int avic_init_backing_page(struct kvm_vcpu *vcpu)
+ 	 * fully initialized AVIC.
+ 	 */
+ 	if (id > max_id) {
+-		kvm_set_apicv_inhibit(vcpu->kvm, APICV_INHIBIT_REASON_PHYSICAL_ID_TOO_BIG);
++		kvm_set_apicv_inhibit(vcpu->kvm->planes[0], APICV_INHIBIT_REASON_PHYSICAL_ID_TOO_BIG);
+ 		vcpu->arch.apic->apicv_active = false;
+ 		return 0;
+ 	}
+diff --git a/arch/x86/kvm/svm/sev.c b/arch/x86/kvm/svm/sev.c
+index fe5e05e2162d..79fee7ebc19b 100644
+--- a/arch/x86/kvm/svm/sev.c
++++ b/arch/x86/kvm/svm/sev.c
+@@ -569,7 +569,7 @@ static int __sev_guest_init(struct kvm *kvm, struct kvm_sev_cmd *argp,
+ 	INIT_LIST_HEAD(&sev->mirror_vms);
+ 	sev->need_init = false;
+ 
+-	kvm_set_apicv_inhibit(kvm->planes[[0], APICV_INHIBIT_REASON_SEV);
++	kvm_set_apicv_inhibit(kvm->planes[0], APICV_INHIBIT_REASON_SEV);
+ 
+ 	return 0;
+ 
+-- 
+2.55.0
+

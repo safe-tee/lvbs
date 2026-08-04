@@ -1,0 +1,25 @@
+From fb42a94b2ea0657047d617b13ba50193d2738316 Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@microsoft.com>
+Date: Tue, 17 Mar 2026 16:32:13 -0700
+Subject: [RFC PATCH v1 03/42] Fix compile error
+
+---
+ arch/x86/kvm/vmx/vmx.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/kvm/vmx/vmx.c b/arch/x86/kvm/vmx/vmx.c
+index 03e1ce935799..ee1d606e3314 100644
+--- a/arch/x86/kvm/vmx/vmx.c
++++ b/arch/x86/kvm/vmx/vmx.c
+@@ -417,7 +417,7 @@ static noinstr void vmx_l1d_flush(struct kvm_vcpu *vcpu)
+ 		kvm_clear_cpu_l1tf_flush_l1d();
+ 	}
+ 
+-	vcpu->stat.l1d_flush++;
++	vcpu->stat->l1d_flush++;
+ 
+ 	if (static_cpu_has(X86_FEATURE_FLUSH_L1D)) {
+ 		native_wrmsrq(MSR_IA32_FLUSH_CMD, L1D_FLUSH);
+-- 
+2.55.0
+

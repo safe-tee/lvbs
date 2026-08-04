@@ -1,0 +1,43 @@
+From 2948caf9104fe2d201b6d3145ad214392fbe358b Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@linux.microsoft.com>
+Date: Tue, 28 Jul 2026 18:32:10 -0700
+Subject: [RFC PATCH v1 36/42] KVM: plane: handle KVM_CHECK_EXTENSION on the
+ plane fd
+
+A plane file descriptor did not implement KVM_CHECK_EXTENSION and failed
+with -ENOTTY, but userspace needs to be able to query capabilities on it.
+Forward the query to the plane's parent VM, except for KVM_CAP_PLANES
+which returns 0 because a plane cannot host planes of its own.
+---
+ virt/kvm/kvm_main.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index 3a1a09f26340..6e4f3f3e6881 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -4946,12 +4946,21 @@ static long kvm_vcpu_compat_ioctl(struct file *filp,
+ }
+ #endif
+ 
++static int kvm_vm_ioctl_check_extension_generic(struct kvm *kvm, long arg);
++
+ static long __kvm_plane_ioctl(struct kvm_plane *plane, unsigned int ioctl, unsigned long arg)
+ {
+ 	void __user *argp = (void __user *)arg;
+ 	long r;
+ 
+ 	switch (ioctl) {
++	case KVM_CHECK_EXTENSION:
++		/* A plane cannot host planes of its own. */
++		if (arg == KVM_CAP_PLANES)
++			r = 0;
++		else
++			r = kvm_vm_ioctl_check_extension_generic(plane->kvm, arg);
++		break;
+ 	case KVM_CREATE_VCPU:
+ 		r = kvm_plane_ioctl_create_vcpu(plane, arg);
+ 		break;
+-- 
+2.55.0
+

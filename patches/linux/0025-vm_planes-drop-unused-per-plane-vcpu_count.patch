@@ -1,0 +1,78 @@
+From 38058b3428f4e3a59de793011fce3bd42e41f433 Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@linux.microsoft.com>
+Date: Wed, 17 Jun 2026 16:57:01 -0700
+Subject: [RFC PATCH v1 25/42] vm_planes: drop unused per-plane vcpu_count
+
+Under the in-kernel "Option B" secure-plane model the secure plane runs
+on plane-0's existing vCPU thread and is left stopped until the first VTL
+call, so a plane never owns a distinct set of vCPUs. The vcpu_count field
+in struct vm_plane_config (and the matching parse-state copy) is no longer
+consulted by anything in the kernel: drop the field, its VCPU_COUNT config
+key parsing, its zero-init and its presence check.
+
+No functional change; the value was already unused on the boot path.
+
+Signed-off-by: Sriram Nambakam <snambakam@linux.microsoft.com>
+---
+ include/linux/vm_planes.h |  1 -
+ init/vm_planes.c          | 11 -----------
+ 2 files changed, 12 deletions(-)
+
+diff --git a/include/linux/vm_planes.h b/include/linux/vm_planes.h
+index 47f05fa80039..1130557cf5aa 100644
+--- a/include/linux/vm_planes.h
++++ b/include/linux/vm_planes.h
+@@ -20,7 +20,6 @@ struct vm_plane_config {
+ 	phys_addr_t load_offset;
+ 	phys_addr_t memory_size;
+ 	phys_addr_t entry_point;
+-	unsigned int vcpu_count;
+ 	unsigned int kernel_format;
+ 	char kernel[VM_PLANE_KERNEL_NAME_MAX];
+ 	char cmdline[VM_PLANE_CMDLINE_MAX];
+diff --git a/init/vm_planes.c b/init/vm_planes.c
+index 274c0015fe76..10c7facdb1af 100644
+--- a/init/vm_planes.c
++++ b/init/vm_planes.c
+@@ -25,7 +25,6 @@ static bool __initdata enable_vm_planes_requested;
+ struct vm_plane_parse_state {
+ 	phys_addr_t load_offset;
+ 	phys_addr_t memory_size;
+-	unsigned int vcpu_count;
+ 	unsigned int kernel_format;
+ 	char kernel[VM_PLANE_KERNEL_NAME_MAX];
+ 	char cmdline[VM_PLANE_CMDLINE_MAX];
+@@ -275,14 +274,6 @@ static int __init parse_plane_cfg_line(const char *line, size_t len,
+ 		return 0;
+ 	}
+ 
+-	if (!strcmp(key, "VCPU_COUNT")) {
+-		if (parsed_u64 == 0 || parsed_u64 > UINT_MAX)
+-			return -EINVAL;
+-		plane_cfg[plane_id].vcpu_count = (unsigned int)parsed_u64;
+-		state[plane_id].vcpu_count = (unsigned int)parsed_u64;
+-		return 0;
+-	}
+-
+ 	return -ENOENT;
+ }
+ 
+@@ -314,7 +305,6 @@ static int __init parse_vm_planes_kconfig(const char *buf, size_t len,
+ 	for (i = 0; i < *plane_count; i++) {
+ 		state[i].load_offset = VM_PLANES_UNSET_VALUE;
+ 		state[i].memory_size = VM_PLANES_UNSET_VALUE;
+-		state[i].vcpu_count = 0;
+ 		state[i].kernel[0] = '\0';
+ 		state[i].cmdline[0] = '\0';
+ 	}
+@@ -336,7 +326,6 @@ static int __init parse_vm_planes_kconfig(const char *buf, size_t len,
+ 	for (i = 1; i < *plane_count; i++) {
+ 		if (state[i].load_offset == VM_PLANES_UNSET_VALUE ||
+ 		    state[i].memory_size == VM_PLANES_UNSET_VALUE ||
+-		    !state[i].vcpu_count ||
+ 		    !state[i].kernel[0])
+ 			return -EINVAL;
+ 	}
+-- 
+2.55.0
+

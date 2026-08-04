@@ -1,0 +1,109 @@
+From 7f07c213898e5ee2e88c3a61bbb237485a08d9de Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@linux.microsoft.com>
+Date: Wed, 17 Jun 2026 17:11:52 -0700
+Subject: [RFC PATCH v1 27/42] KVM: planes: add arch-neutral in-kernel plane
+ switch helper
+
+Factor the in-kernel plane switch out of the SEV-SNP VMPL path into a
+generic kvm_vcpu_switch_plane(). Both vCPUs share the same vcpu->common,
+so the switch only validates the sibling relationship, flips the
+per-plane runnable/stopped state, and returns 1 to keep the caller
+inside KVM_RUN; the run loop then re-selects the target plane via
+kvm_vcpu_select_plane().
+
+This is the common core shared by all secure-plane backends (SEV-SNP
+VMPL today, VBS/VTL next); vendor-specific state preparation stays in
+the caller. Convert __sev_snp_run_vmpl() to use it.
+
+Signed-off-by: Sriram Nambakam <snambakam@linux.microsoft.com>
+---
+ arch/x86/kvm/svm/sev.c   | 13 ++++++-------
+ include/linux/kvm_host.h |  1 +
+ virt/kvm/kvm_main.c      | 27 +++++++++++++++++++++++++++
+ 3 files changed, 34 insertions(+), 7 deletions(-)
+
+diff --git a/arch/x86/kvm/svm/sev.c b/arch/x86/kvm/svm/sev.c
+index 53e76d22eb08..b9b0bbb72394 100644
+--- a/arch/x86/kvm/svm/sev.c
++++ b/arch/x86/kvm/svm/sev.c
+@@ -4507,21 +4507,20 @@ static int __sev_snp_run_vmpl(struct vcpu_svm *svm, unsigned int vmpl)
+ {
+ 	struct kvm_vcpu *vcpu = &svm->vcpu;
+ 	struct kvm_vcpu *target = vcpu->common->vcpus[vmpl];
+-	struct vcpu_svm *target_svm = to_svm(target);
++	struct vcpu_svm *target_svm;
+ 
+ 	if (!target)
+ 		return -EINVAL;
+ 
+-	/* Mark current plane as stopped so it is not selected */
++	target_svm = to_svm(target);
++
++	/* SEV-specific preparation for the target VMPL before switching. */
+ 	kvm_set_mp_state(target, KVM_MP_STATE_RUNNABLE);
+ 	/* In case KVM_REQ_UPDATE_PROTECTED_GUEST_STATE is set - mark the new VMSA as runnable */
+ 	target_svm->sev_es.snp_ap_runnable = true;
+-	kvm_vcpu_set_plane_runnable(target);
+-	kvm_vcpu_set_plane_stopped(vcpu);
+-
+-	kvm_make_request(KVM_REQ_PLANE_RESCHED, vcpu);
+ 
+-	return 1;
++	/* Perform the arch-neutral in-kernel plane switch. */
++	return kvm_vcpu_switch_plane(vcpu, target);
+ }
+ 
+ static int sev_snp_run_vmpl(struct vcpu_svm *svm)
+diff --git a/include/linux/kvm_host.h b/include/linux/kvm_host.h
+index 82e557e66152..c6cf2b6c0076 100644
+--- a/include/linux/kvm_host.h
++++ b/include/linux/kvm_host.h
+@@ -455,6 +455,7 @@ struct kvm_vcpu {
+ 
+ void kvm_vcpu_set_plane_runnable(struct kvm_vcpu *vcpu);
+ void kvm_vcpu_set_plane_stopped(struct kvm_vcpu *vcpu);
++int kvm_vcpu_switch_plane(struct kvm_vcpu *vcpu, struct kvm_vcpu *target);
+ struct kvm_vcpu *kvm_vcpu_select_plane(struct kvm_vcpu *vcpu);
+ 
+ static inline bool kvm_vcpu_wants_to_run(struct kvm_vcpu *vcpu)
+diff --git a/virt/kvm/kvm_main.c b/virt/kvm/kvm_main.c
+index 9623ab8ebd9e..553c282500fd 100644
+--- a/virt/kvm/kvm_main.c
++++ b/virt/kvm/kvm_main.c
+@@ -5039,6 +5039,33 @@ void kvm_vcpu_set_plane_stopped(struct kvm_vcpu *vcpu)
+ }
+ EXPORT_SYMBOL_FOR_KVM_INTERNAL(kvm_vcpu_set_plane_stopped);
+ 
++/*
++ * Switch the logical CPU from the currently-running plane (@vcpu) to a sibling
++ * plane (@target) without leaving KVM_RUN.  Both vCPUs share the same
++ * vcpu->common, so this only flips the per-plane runnable/stopped state and
++ * requests a plane reschedule; the run loop in kvm_arch_vcpu_ioctl_run() then
++ * re-selects @target via kvm_vcpu_select_plane() and re-enters the guest.
++ *
++ * This is the arch-neutral core of the in-kernel plane switch shared by all
++ * secure-plane backends (SEV-SNP VMPL, VBS/VTL on Intel and AMD, and, in the
++ * future, Arm stage-2).  Any vendor-specific state preparation must be done by
++ * the caller before invoking this helper.
++ *
++ * Returns 1 to keep the caller inside KVM_RUN, or -EINVAL if @target is not a
++ * valid sibling plane of @vcpu.
++ */
++int kvm_vcpu_switch_plane(struct kvm_vcpu *vcpu, struct kvm_vcpu *target)
++{
++	if (!target || target->common != vcpu->common)
++		return -EINVAL;
++
++	kvm_vcpu_set_plane_runnable(target);
++	kvm_vcpu_set_plane_stopped(vcpu);
++
++	return 1;
++}
++EXPORT_SYMBOL_FOR_KVM_INTERNAL(kvm_vcpu_switch_plane);
++
+ struct kvm_vcpu *kvm_vcpu_select_plane(struct kvm_vcpu *vcpu)
+ {
+ 	struct kvm_vcpu_common *common = vcpu->common;
+-- 
+2.55.0
+

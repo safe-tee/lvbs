@@ -1,0 +1,325 @@
+From dedc79c2212279aca529444d9f7032b83c255ab5 Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@linux.microsoft.com>
+Date: Tue, 28 Jul 2026 23:34:16 -0700
+Subject: [RFC PATCH v1 41/42] kvm: x86: finalize per-plane APIC state and
+ CPUID placement
+
+Adopt the vm-planes-merged design for x86 plane state: keep CPUID and
+cpu_caps in kvm_vcpu_arch_common, make apic_map and APICv-inhibit
+tracking VM-scoped again, and drop the superseded intermediate fields
+(planes_share_fpu, irr_pending_planes, kvm_arch_plane.apicv_inhibit_reasons,
+kvm_lapic_irq.plane). These changes originated in merge-commit conflict
+resolutions that a --no-merges linearization could not carry over.
+---
+ arch/x86/include/asm/kvm_host.h | 36 +++++-----------------
+ arch/x86/kvm/cpuid.c            | 19 +-----------
+ arch/x86/kvm/hyperv.c           |  1 -
+ arch/x86/kvm/i8254.c            |  4 +--
+ arch/x86/kvm/lapic.c            | 53 +++++++--------------------------
+ arch/x86/kvm/xen.c              |  1 -
+ 6 files changed, 20 insertions(+), 94 deletions(-)
+
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index bbccb9d3d801..b1a7e4ca8870 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -956,12 +956,6 @@ struct kvm_vcpu_arch {
+ 	u64 ia32_xss;
+ 	u64 guest_supported_xss;
+ 
+-	/*
+-	 * Only valid in plane0.  The bitmask of planes that received
+-	 * an interrupt, to be checked against req_exit_planes.
+-	 */
+-	atomic_t irr_pending_planes;
+-
+ 	struct kvm_pio_request pio;
+ 	void *pio_data;
+ 	void *sev_pio_data;
+@@ -1175,10 +1169,6 @@ struct kvm_arch_memory_slot {
+ 	unsigned short *gfn_write_track;
+ };
+ 
+-struct kvm_arch_plane {
+-	unsigned long apicv_inhibit_reasons;
+-};
+-
+ /*
+  * Track the mode of the optimized logical map, as the rules for decoding the
+  * destination vary per mode.  Enabling the optimized logical map requires all
+@@ -1397,13 +1387,11 @@ enum kvm_apicv_inhibit {
+ 	/*
+ 	 * PIT (i8254) 're-inject' mode, relies on EOI intercept,
+ 	 * which AVIC doesn't support for edge triggered interrupts.
+-	 * Applied only to plane 0.
+ 	 */
+ 	APICV_INHIBIT_REASON_PIT_REINJ,
+ 
+ 	/*
+-	 * AVIC is disabled because SEV doesn't support it.  Sticky and applied
+-	 * only to plane 0.
++	 * AVIC is disabled because SEV doesn't support it.
+ 	 */
+ 	APICV_INHIBIT_REASON_SEV,
+ 
+@@ -1483,7 +1471,6 @@ struct kvm_arch {
+ 	unsigned int indirect_shadow_pages;
+ 	u8 mmu_valid_gen;
+ 	u8 vm_type;
+-	bool planes_share_fpu;
+ 	bool has_private_mem;
+ 	bool has_protected_state;
+ 	bool has_protected_eoi;
+@@ -1805,7 +1792,6 @@ struct kvm_lapic_irq {
+ 	u16 delivery_mode;
+ 	u16 dest_mode;
+ 	bool level;
+-	u8 plane;
+ 	u16 trig_mode;
+ 	u32 shorthand;
+ 	u32 dest_id;
+@@ -2399,21 +2385,21 @@ gpa_t kvm_mmu_gva_to_gpa_system(struct kvm_vcpu *vcpu, gva_t gva,
+ bool kvm_apicv_activated(struct kvm *kvm);
+ bool kvm_vcpu_apicv_activated(struct kvm_vcpu *vcpu);
+ void __kvm_vcpu_update_apicv(struct kvm_vcpu *vcpu);
+-void __kvm_set_or_clear_apicv_inhibit(struct kvm_plane *plane,
++void __kvm_set_or_clear_apicv_inhibit(struct kvm *kvm,
+ 				      enum kvm_apicv_inhibit reason, bool set);
+-void kvm_set_or_clear_apicv_inhibit(struct kvm_plane *plane,
++void kvm_set_or_clear_apicv_inhibit(struct kvm *kvm,
+ 				    enum kvm_apicv_inhibit reason, bool set);
+ 
+-static inline void kvm_set_apicv_inhibit(struct kvm_plane *plane,
++static inline void kvm_set_apicv_inhibit(struct kvm *kvm,
+ 					 enum kvm_apicv_inhibit reason)
+ {
+-	kvm_set_or_clear_apicv_inhibit(plane, reason, true);
++	kvm_set_or_clear_apicv_inhibit(kvm, reason, true);
+ }
+ 
+-static inline void kvm_clear_apicv_inhibit(struct kvm_plane *plane,
++static inline void kvm_clear_apicv_inhibit(struct kvm *kvm,
+ 					   enum kvm_apicv_inhibit reason)
+ {
+-	kvm_set_or_clear_apicv_inhibit(plane, reason, false);
++	kvm_set_or_clear_apicv_inhibit(kvm, reason, false);
+ }
+ 
+ void kvm_inc_or_dec_irq_window_inhibit(struct kvm *kvm, bool inc);
+@@ -2503,8 +2489,6 @@ enum {
+ # define kvm_memslots_for_spte_role(kvm, role) __kvm_memslots(kvm, 0)
+ #endif
+ 
+-#define KVM_MAX_VCPU_PLANES	16
+-
+ int kvm_cpu_has_injectable_intr(struct kvm_vcpu *v);
+ int kvm_cpu_has_interrupt(struct kvm_vcpu *vcpu);
+ int kvm_cpu_has_extint(struct kvm_vcpu *v);
+@@ -2539,9 +2523,6 @@ void kvm_make_scan_ioapic_request(struct kvm *kvm);
+ void kvm_make_scan_ioapic_request_mask(struct kvm *kvm,
+ 				       unsigned long *vcpu_bitmap);
+ 
+-void kvm_arch_init_plane(struct kvm_plane *plane);
+-void kvm_arch_free_plane(struct kvm_plane *plane);
+-
+ bool kvm_arch_async_page_not_present(struct kvm_vcpu *vcpu,
+ 				     struct kvm_async_pf *work);
+ void kvm_arch_async_page_present(struct kvm_vcpu *vcpu,
+@@ -2612,7 +2593,4 @@ static inline bool kvm_arch_has_irq_bypass(void)
+ 	return enable_device_posted_irqs;
+ }
+ 
+-int kvm_arch_nr_vcpu_planes(struct kvm *kvm);
+-bool kvm_arch_planes_share_fpu(struct kvm *kvm);
+-
+ #endif /* _ASM_X86_KVM_HOST_H */
+diff --git a/arch/x86/kvm/cpuid.c b/arch/x86/kvm/cpuid.c
+index ce337c6d3bcf..7b8cd379ba9f 100644
+--- a/arch/x86/kvm/cpuid.c
++++ b/arch/x86/kvm/cpuid.c
+@@ -555,7 +555,7 @@ static int kvm_set_cpuid(struct kvm_vcpu *vcpu, struct kvm_cpuid_entry2 *e2,
+ 	 * KVM_SET_CPUID{,2} again. To support this legacy behavior, check
+ 	 * whether the supplied CPUID data is equal to what's already set.
+ 	 */
+-	if (!kvm_can_set_cpuid_and_feature_msrs(vcpu) || vcpu->has_planes) {
++	if (!kvm_can_set_cpuid_and_feature_msrs(vcpu)) {
+ 		r = kvm_cpuid_check_equal(vcpu, e2, nent);
+ 		if (r)
+ 			goto err;
+@@ -594,23 +594,6 @@ static int kvm_set_cpuid(struct kvm_vcpu *vcpu, struct kvm_cpuid_entry2 *e2,
+ 	return r;
+ }
+ 
+-int kvm_dup_cpuid(struct kvm_vcpu *vcpu, struct kvm_vcpu *source)
+-{
+-	if (WARN_ON_ONCE(vcpu->arch.cpuid_entries || vcpu->arch.cpuid_nent))
+-		return -EEXIST;
+-
+-	vcpu->arch.cpuid_entries = kmemdup(source->arch.cpuid_entries,
+-		     source->arch.cpuid_nent * sizeof(struct kvm_cpuid_entry2),
+-		     GFP_KERNEL_ACCOUNT);
+-	if (!vcpu->arch.cpuid_entries)
+-		return -ENOMEM;
+-
+-	memcpy(vcpu->arch.cpu_caps, source->arch.cpu_caps, sizeof(source->arch.cpu_caps));
+-	vcpu->arch.cpuid_nent = source->arch.cpuid_nent;
+-
+-	return 0;
+-}
+-
+ /* when an old userspace process fills a new kernel module */
+ int kvm_vcpu_ioctl_set_cpuid(struct kvm_vcpu *vcpu,
+ 			     struct kvm_cpuid *cpuid,
+diff --git a/arch/x86/kvm/hyperv.c b/arch/x86/kvm/hyperv.c
+index 8ef09b8125b7..ee6b32d2a5cb 100644
+--- a/arch/x86/kvm/hyperv.c
++++ b/arch/x86/kvm/hyperv.c
+@@ -491,7 +491,6 @@ static int synic_set_irq(struct kvm_vcpu_hv_synic *synic, u32 sint)
+ 	irq.delivery_mode = APIC_DM_FIXED;
+ 	irq.vector = vector;
+ 	irq.level = 1;
+-
+ 	ret = kvm_irq_delivery_to_apic(vcpu->plane, vcpu->arch.apic, &irq);
+ 	trace_kvm_hv_synic_set_irq(vcpu->vcpu_id, sint, irq.vector, ret);
+ 	return ret;
+diff --git a/arch/x86/kvm/i8254.c b/arch/x86/kvm/i8254.c
+index cd47fd88c9f7..bfe590378bd2 100644
+--- a/arch/x86/kvm/i8254.c
++++ b/arch/x86/kvm/i8254.c
+@@ -305,13 +305,13 @@ static void kvm_pit_set_reinject(struct kvm_pit *pit, bool reinject)
+ 	 * So, deactivate APICv when PIT is in reinject mode.
+ 	 */
+ 	if (reinject) {
+-		kvm_set_apicv_inhibit(kvm->planes[0], APICV_INHIBIT_REASON_PIT_REINJ);
++		kvm_set_apicv_inhibit(kvm, APICV_INHIBIT_REASON_PIT_REINJ);
+ 		/* The initial state is preserved while ps->reinject == 0. */
+ 		kvm_pit_reset_reinject(pit);
+ 		kvm_register_irq_ack_notifier(kvm, &ps->irq_ack_notifier);
+ 		kvm_register_irq_mask_notifier(kvm, 0, &pit->mask_notifier);
+ 	} else {
+-		kvm_clear_apicv_inhibit(kvm->planes[0], APICV_INHIBIT_REASON_PIT_REINJ);
++		kvm_clear_apicv_inhibit(kvm, APICV_INHIBIT_REASON_PIT_REINJ);
+ 		kvm_unregister_irq_ack_notifier(kvm, &ps->irq_ack_notifier);
+ 		kvm_unregister_irq_mask_notifier(kvm, 0, &pit->mask_notifier);
+ 	}
+diff --git a/arch/x86/kvm/lapic.c b/arch/x86/kvm/lapic.c
+index 4cca1ea6a16e..ff923133a834 100644
+--- a/arch/x86/kvm/lapic.c
++++ b/arch/x86/kvm/lapic.c
+@@ -405,7 +405,6 @@ enum {
+ 
+ static void kvm_recalculate_apic_map(struct kvm_plane *plane)
+ {
+-	struct kvm_plane *plane = kvm->planes[0];
+ 	struct kvm_apic_map *new, *old = NULL;
+ 	struct kvm *kvm = plane->kvm;
+ 	struct kvm_vcpu *vcpu;
+@@ -486,19 +485,19 @@ static void kvm_recalculate_apic_map(struct kvm_plane *plane)
+ 	 * map also applies to APICv.
+ 	 */
+ 	if (!new)
+-		kvm_set_apicv_inhibit(plane, APICV_INHIBIT_REASON_PHYSICAL_ID_ALIASED);
++		kvm_set_apicv_inhibit(kvm, APICV_INHIBIT_REASON_PHYSICAL_ID_ALIASED);
+ 	else
+-		kvm_clear_apicv_inhibit(plane, APICV_INHIBIT_REASON_PHYSICAL_ID_ALIASED);
++		kvm_clear_apicv_inhibit(kvm, APICV_INHIBIT_REASON_PHYSICAL_ID_ALIASED);
+ 
+ 	if (!new || new->logical_mode == KVM_APIC_MODE_MAP_DISABLED)
+-		kvm_set_apicv_inhibit(plane, APICV_INHIBIT_REASON_LOGICAL_ID_ALIASED);
++		kvm_set_apicv_inhibit(kvm, APICV_INHIBIT_REASON_LOGICAL_ID_ALIASED);
+ 	else
+-		kvm_clear_apicv_inhibit(plane, APICV_INHIBIT_REASON_LOGICAL_ID_ALIASED);
++		kvm_clear_apicv_inhibit(kvm, APICV_INHIBIT_REASON_LOGICAL_ID_ALIASED);
+ 
+ 	if (xapic_id_mismatch)
+-		kvm_set_apicv_inhibit(plane, APICV_INHIBIT_REASON_APIC_ID_MODIFIED);
++		kvm_set_apicv_inhibit(kvm, APICV_INHIBIT_REASON_APIC_ID_MODIFIED);
+ 	else
+-		kvm_clear_apicv_inhibit(plane, APICV_INHIBIT_REASON_APIC_ID_MODIFIED);
++		kvm_clear_apicv_inhibit(kvm, APICV_INHIBIT_REASON_APIC_ID_MODIFIED);
+ 
+ 	old = rcu_dereference_protected(plane->arch.apic_map,
+ 			lockdep_is_held(&plane->arch.apic_map_lock));
+@@ -1396,39 +1395,6 @@ int __kvm_irq_delivery_to_apic(struct kvm_plane *plane, struct kvm_lapic *src,
+ 	return r;
+ }
+ 
+-static void kvm_lapic_deliver_interrupt(struct kvm_vcpu *vcpu, struct kvm_lapic *apic,
+-					int delivery_mode, int trig_mode, int vector)
+-{
+-	struct kvm_vcpu *plane0_vcpu = vcpu->plane0;
+-	struct kvm_plane *running_plane;
+-	u16 req_exit_planes;
+-
+-	kvm_x86_call(deliver_interrupt)(apic, delivery_mode, trig_mode, vector);
+-
+-	/*
+-	 * test_and_set_bit implies a memory barrier, so IRR is written before
+-	 * reading irr_pending_planes below...
+-	 */
+-	if (!test_and_set_bit(vcpu->plane, &plane0_vcpu->arch.irr_pending_planes)) {
+-		/*
+-		 * ... and also running_plane and req_exit_planes are read after writing
+-		 * irr_pending_planes.  Both barriers pair with kvm_arch_vcpu_ioctl_run().
+-		 */
+-		smp_mb__after_atomic();
+-
+-		running_plane = READ_ONCE(plane0_vcpu->running_plane);
+-		if (!running_plane)
+-			return;
+-
+-		req_exit_planes = READ_ONCE(plane0_vcpu->req_exit_planes);
+-		if (!(req_exit_planes & BIT(vcpu->plane)))
+-			return;
+-
+-		kvm_make_request(KVM_REQ_PLANE_INTERRUPT,
+-				 kvm_get_plane_vcpu(running_plane, vcpu->vcpu_id));
+-	}
+-}
+-
+ /*
+  * Add a pending IRQ into lapic.
+  * Return 1 if successfully added and 0 if discarded.
+@@ -1470,7 +1436,8 @@ static int __apic_accept_irq(struct kvm_lapic *apic, int delivery_mode,
+ 				apic_clear_vector(vector, apic->regs + APIC_TMR);
+ 		}
+ 
+-		kvm_lapic_deliver_interrupt(vcpu, apic, delivery_mode, trig_mode, vector);
++		kvm_x86_call(deliver_interrupt)(apic, delivery_mode,
++						trig_mode, vector);
+ 		break;
+ 
+ 	case APIC_DM_REMRD:
+@@ -2087,7 +2054,7 @@ static void apic_timer_expired(struct kvm_lapic *apic, bool from_timer_fn)
+ 	if (apic_lvtt_tscdeadline(apic) || ktimer->hv_timer_in_use)
+ 		ktimer->expired_tscdeadline = ktimer->tscdeadline;
+ 
+-	if (!from_timer_fn && apic->apicv_active && vcpu->wants_to_run) {
++	if (!from_timer_fn && apic->apicv_active && kvm_vcpu_wants_to_run(vcpu)) {
+ 		WARN_ON(kvm_get_running_vcpu() != vcpu);
+ 		kvm_apic_inject_pending_timer_irqs(apic);
+ 		return;
+@@ -2867,7 +2834,7 @@ static void __kvm_apic_set_base(struct kvm_vcpu *vcpu, u64 value)
+ 
+ 	if ((value & MSR_IA32_APICBASE_ENABLE) &&
+ 	     apic->base_address != APIC_DEFAULT_PHYS_BASE) {
+-		kvm_set_apicv_inhibit(vcpu_to_plane(vcpu),
++		kvm_set_apicv_inhibit(apic->vcpu->kvm,
+ 				      APICV_INHIBIT_REASON_APIC_BASE_MODIFIED);
+ 	}
+ }
+diff --git a/arch/x86/kvm/xen.c b/arch/x86/kvm/xen.c
+index 399406752108..4527f04c6617 100644
+--- a/arch/x86/kvm/xen.c
++++ b/arch/x86/kvm/xen.c
+@@ -625,7 +625,6 @@ void kvm_xen_inject_vcpu_vector(struct kvm_vcpu *v)
+ 	irq.shorthand = APIC_DEST_NOSHORT;
+ 	irq.delivery_mode = APIC_DM_FIXED;
+ 	irq.level = 1;
+-
+ 	kvm_irq_delivery_to_apic(v->plane, NULL, &irq);
+ }
+ 
+-- 
+2.55.0
+

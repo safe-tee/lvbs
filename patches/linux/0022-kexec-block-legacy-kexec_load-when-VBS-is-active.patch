@@ -1,0 +1,50 @@
+From ef2ac049ba20be5bd23f5e56f3b9497151b3438f Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@linux.microsoft.com>
+Date: Tue, 9 Jun 2026 17:26:24 -0700
+Subject: [RFC PATCH v1 22/42] kexec: block legacy kexec_load when VBS is
+ active
+
+Legacy kexec_load accepts raw memory segments and bypasses the
+file-based VBS validation path. Reject non-crash usage when a VBS
+backend is registered to prevent untrusted payload staging.
+
+Crash dumps (KEXEC_ON_CRASH) are still permitted since they serve a
+different purpose and do not replace the running kernel.
+
+Returns -EKEYREJECTED so userspace can distinguish VBS policy denial
+from permission errors.
+---
+ kernel/kexec.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/kernel/kexec.c b/kernel/kexec.c
+index 90756dc6339b..049afe1e1f5d 100644
+--- a/kernel/kexec.c
++++ b/kernel/kexec.c
+@@ -16,6 +16,7 @@
+ #include <linux/syscalls.h>
+ #include <linux/vmalloc.h>
+ #include <linux/slab.h>
++#include <linux/vbs.h>
+ 
+ #include "kexec_internal.h"
+ 
+@@ -205,6 +206,15 @@ static inline int kexec_load_check(unsigned long nr_segments,
+ 	int image_type = (flags & KEXEC_ON_CRASH) ?
+ 			 KEXEC_TYPE_CRASH : KEXEC_TYPE_DEFAULT;
+ 	int result;
++	bool crash_kexec = !!(flags & KEXEC_ON_CRASH);
++
++	/*
++	 * Legacy kexec_load accepts raw memory segments and bypasses the
++	 * file-based VBS validation path. Reject non-crash usage when VBS
++	 * is active to prevent untrusted payload staging.
++	 */
++	if (vbs_available() && !crash_kexec)
++		return -EKEYREJECTED;
+ 
+ 	/* We only trust the superuser with rebooting the system. */
+ 	if (!kexec_load_permitted(image_type))
+-- 
+2.55.0
+

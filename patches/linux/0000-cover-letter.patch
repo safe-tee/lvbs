@@ -1,53 +1,89 @@
-From b63dfe2ef84ea7d36a7e7aa929d351500379ad6d Mon Sep 17 00:00:00 2001
+From bf6ed39a4e3273891281210a0724210c23fd1e36 Mon Sep 17 00:00:00 2001
 From: Sriram Nambakam <snambakam@linux.microsoft.com>
-Date: Tue, 12 May 2026 11:31:00 -0700
-Subject: [PATCH 00/49] *** SUBJECT HERE ***
+Date: Tue, 4 Aug 2026 16:07:13 -0700
+Subject: [RFC PATCH v1 00/42] VBS/VSM-on-KVM: VBS integration for KVM VM
+ planes
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
-*** BLURB HERE ***
+This RFC demonstrates how KVM VM Planes can be used to implement
+Virtualization-Based Security (VBS) using Virtual Trust Levels (VTLs).
+It provides a concrete implementation for discussion and is intended to
+solicit feedback on the architecture, kernel interfaces, and division of
+responsibility between KVM, the normal guest kernel, and a secure kernel.
 
-Paolo Bonzini (29):
-  Documentation: kvm: introduce "VM plane" concept
-  KVM: API definitions for plane userspace exit
-  KVM: add plane info to structs
-  KVM: introduce struct kvm_arch_plane
-  KVM: add plane support to KVM_SIGNAL_MSI
-  KVM: move mem_attr_array to kvm_plane
-  KVM: do not use online_vcpus to test vCPU validity
-  KVM: move vcpu_array to struct kvm_plane
-  KVM: implement plane file descriptors ioctl and creation
-  KVM: share statistics for same vCPU id on different planes
-  KVM: anticipate allocation of dirty ring
-  KVM: share dirty ring for same vCPU id on different planes
-  KVM: implement vCPU creation for extra planes
-  KVM: pass plane to kvm_arch_vcpu_create
-  KVM: x86: pass vcpu to kvm_pv_send_ipi()
-  KVM: x86: split "if" in __kvm_set_or_clear_apicv_inhibit
-  KVM: x86: block creating irqchip if planes are active
-  KVM: x86: track APICv inhibits per plane
-  KVM: x86: move APIC map to kvm_arch_plane
-  KVM: x86: add planes support for interrupt delivery
-  KVM: x86: add infrastructure to share FPU across planes
-  KVM: x86: implement initial plane support
-  KVM: x86: extract kvm_post_set_cpuid
-  KVM: x86: initialize CPUID for non-default planes
-  KVM: x86: handle interrupt priorities for planes
-  KVM: x86: enable up to 16 planes
-  selftests: kvm: introduce basic test for VM planes
-  selftests: kvm: add plane infrastructure
-  selftests: kvm: add x86-specific plane test
+The complete implementation is available in three repositories under the
+safe-tee organization:
 
-Sriram Nambakam (20):
+  Linux and KVM support:
+  https://github.com/safe-tee/linux/tree/kvm-planes-v7.2-rc5
+
+  QEMU support:
+  https://github.com/safe-tee/qemu/tree/qemu-planes-v11.1.0-rc1
+
+  Build, test, and integration tooling:
+  https://github.com/safe-tee/lvbs
+
+Current build and run instructions are maintained in the lvbs repository:
+
+  Build the Plane 0 kernel, Plane 1 secure kernel, VM image, and run QEMU:
+  https://github.com/safe-tee/lvbs/blob/main/docs/how-to/how-to-build.md
+
+The VBS core is implemented under security/vbs and exposes a
+transport-independent interface through include/linux/vbs.h.  The normal
+guest kernel runs in Plane 0 (VTL0) and requests security services from a
+higher-trust kernel running in Plane 1 (VTL1).  For KVM VM Planes, these
+requests are transported through a shared calling page and a KVM
+hypercall-mediated plane switch.
+
+The RFC demonstrates loading and starting the secure kernel, communication
+between VTL0 and VTL1, and hypervisor-enforced kernel integrity (HEKI).
+The secure plane can protect VTL0 memory independently of VTL0, seal kernel
+text and read-only data, participate in module validation and permission
+changes, and validate kexec images.
+
+This mail series contains only the 42 VBS and integration patches authored
+by me.  It does not duplicate the prerequisite VM Planes patches from Joerg
+Roedel and Paolo Bonzini.  The Linux branch linked above contains the full
+integrated tree, including their patches and related KVM work from Melody
+Wang and Tom Lendacky, used for development and testing.
+
+This is prototype code and is not yet intended for production use.  In
+particular, the KVM backend currently routes VTL calls through CPU 0 and
+the VM Planes configuration requires a split in-kernel IRQ chip.
+Feedback on the overall model, the VBS interface, and how this work should
+be split for upstream review would be appreciated.
+
+Acknowledgments
+===============
+
+This work stands on top of, and is indebted to, several prior efforts:
+
+  - Joerg Roedel, whose KVM VM Planes tree provides the in-kernel plane
+    infrastructure that the VBS/VSM secure plane relies on.
+
+  - Paolo Bonzini, whose "[RFC PATCH 00/29] KVM: VM planes" introduced the
+    VM plane concept to KVM as a common in-kernel model for AMD VMPLs,
+    Intel TDX partitions, Hyper-V VTLs, and Arm CCA planes.  Joerg Roedel's
+    work carries that model forward.
+    https://lwn.net/Articles/1016113/
+
+  - The prior Linux VBS (LVBS) and Hypervisor-Enforced Kernel Integrity
+    (HEKI) work by James Morris, Thara Gopinath, Wei Liu,
+    Madhavan Venkataraman, and Mickaël Salaün, posted as
+    "[RFC PATCH v2 00/19] Hypervisor-Enforced Kernel Integrity (HEKI)".
+    The kernel-sealing model used here follows their design.
+
+  - James Bottomley and James Morris, for their ongoing work on VSM-on-KVM,
+    which informed the design and direction of this series.
+
+Sriram Nambakam (42):
   Fix merge issue - Remove duplicate definition for
     kvm_arch_has_irq_bypass
   Fix compilation
   Fix compile error
   Fix compile errors
-  Fix condition - Increment the counter and use online_vcpus for plane-0
-    (normal) vCPUs - mirror plane0_vcpu->vcpu_idx only for
-    secondary-plane vCPUs.
   Initial support for VM Planes - Add kernel config for CONFIG_VM_PLANES
     - Parse vm plane config from initrd for plane configuration - Make
     hypercalls to allocate memory for the vm planes.
@@ -70,7 +106,33 @@ Sriram Nambakam (20):
   vbs: Add module authentication via VBS/HEKI
   vbs: Add kexec validation and make module auth non-fatal
   Merge branch 'master' into vm-planes
+  kvm: x86: fix merged plane API/stat build regressions
+  KVM: x86: exit VM planes and VBS hypercalls to userspace
+  kexec: block legacy kexec_load when VBS is active
+  kvm: x86: fix merged plane API/stat build regressions
+  KVM: planes: expose memory-attribute setting to in-kernel callers
+  vm_planes: drop unused per-plane vcpu_count
+  drivers/virt: add VBS secure-plane park loop
+  KVM: planes: add arch-neutral in-kernel plane switch helper
+  KVM: x86: add VBS VTL call/return and cross-plane set-mem-attrs
+    hypercalls
+  init/vm_planes: set up planes from rootfs_initcall and load ELF
+    payloads
+  security/vbs: run backend probe and HEKI seal at rootfs_initcall
+  security/vbs: pin the VTL call hypercall to CPU0
+  security/vbs: add secure-plane monitor backend
+  drivers/virt: rename VBS park loop to secure_monitor
+  x86/realmode: skip the sub-1M trampoline for the VBS secure plane
+  KVM: x86: deny normal-plane access to secure-plane memory
+  KVM: plane: handle KVM_CHECK_EXTENSION on the plane fd
+  KVM: selftests: run plane tests with a split IRQ chip
+  kvm: x86: drop obsolete kvm_cache_regs.h
+  kvm: arch: finalize plane hooks and kvm_arch_vcpu_create signature
+  kvm: x86: use kvm_vcpu scheduling-state accessors and struct stat
+    fields
+  kvm: x86: finalize per-plane APIC state and CPUID placement
+  kvm: planes: reconcile core plane state, UAPI and hypercall exit
 
 -- 
-2.53.0
+2.55.0
 
