@@ -1,0 +1,30 @@
+From d24244ffe8b85ea5183c6fd267a58dff02b983b2 Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@linux.microsoft.com>
+Date: Wed, 17 Jun 2026 17:15:44 -0700
+Subject: [RFC PATCH v1 3/5] linux-headers: sync kvm_para.h VBS VTL hypercalls
+
+Import the two new VBS secure-plane hypercall numbers from the kernel
+UAPI: KVM_HC_VBS_VTL_RETURN (16) and KVM_HC_VBS_SET_MEM_ATTRS (17).
+
+Signed-off-by: Sriram Nambakam <snambakam@linux.microsoft.com>
+(cherry picked from commit 92f71c68c2eb42588694ac23fb4a6a8ef8dfa12b)
+---
+ include/standard-headers/linux/kvm_para.h | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/include/standard-headers/linux/kvm_para.h b/include/standard-headers/linux/kvm_para.h
+index ad19aac9d0..def451c43c 100644
+--- a/include/standard-headers/linux/kvm_para.h
++++ b/include/standard-headers/linux/kvm_para.h
+@@ -33,6 +33,8 @@
+ #define KVM_HC_VM_PLANES_CONFIG		13
+ #define KVM_HC_VM_PLANES_ACTIVATE	14
+ #define KVM_HC_VBS_VTL_CALL		15
++#define KVM_HC_VBS_VTL_RETURN		16
++#define KVM_HC_VBS_SET_MEM_ATTRS	17
+ 
+ /*
+  * hypercalls use architecture specific
+-- 
+2.55.0
+

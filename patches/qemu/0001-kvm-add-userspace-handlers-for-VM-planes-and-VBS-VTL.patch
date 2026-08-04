@@ -1,0 +1,915 @@
+From c96b8a54fbb1bc7f3837f96e56d476a6a8219e86 Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@linux.microsoft.com>
+Date: Tue, 9 Jun 2026 08:56:03 -0700
+Subject: [RFC PATCH v1 1/5] kvm: add userspace handlers for VM planes and VBS
+ VTL calls
+
+(cherry picked from commit 47d0da9ac50640f96564997edc4b79f44e70cffa)
+---
+ accel/kvm/kvm-all.c                       |  18 +
+ include/standard-headers/linux/kvm_para.h |   3 +
+ include/system/kvm_int.h                  |  17 +
+ linux-headers/linux/kvm.h                 |   3 +
+ target/i386/kvm/kvm.c                     | 776 ++++++++++++++++++++++
+ 5 files changed, 817 insertions(+)
+
+diff --git a/accel/kvm/kvm-all.c b/accel/kvm/kvm-all.c
+index 46a14ac0f4..80a9791078 100644
+--- a/accel/kvm/kvm-all.c
++++ b/accel/kvm/kvm-all.c
+@@ -822,6 +822,24 @@ void kvm_close(void)
+             close(kvm_get_plane_fd(kvm_state, plane_id));
+             kvm_set_plane_fd(kvm_state, plane_id, -1);
+         } while (plane_id != 0);
++        if (kvm_state->vm_planes) {
++            unsigned int i, j;
++            for (i = 1; i < kvm_state->vm_plane_count; i++) {
++                struct kvm_vm_plane_state *ps = &kvm_state->vm_planes[i];
++                if (ps->vcpu_fds) {
++                    for (j = 0; j < ps->vcpu_count; j++) {
++                        if (ps->vcpu_fds[j] >= 0) {
++                            close(ps->vcpu_fds[j]);
++                        }
++                    }
++                    g_free(ps->vcpu_fds);
++                    ps->vcpu_fds = NULL;
++                }
++            }
++            g_free(kvm_state->vm_planes);
++            kvm_state->vm_planes = NULL;
++            kvm_state->vm_plane_count = 0;
++        }
+         close(kvm_state->fd);
+         kvm_state->fd = -1;
+     }
+diff --git a/include/standard-headers/linux/kvm_para.h b/include/standard-headers/linux/kvm_para.h
+index 015c166302..ad19aac9d0 100644
+--- a/include/standard-headers/linux/kvm_para.h
++++ b/include/standard-headers/linux/kvm_para.h
+@@ -30,6 +30,9 @@
+ #define KVM_HC_SEND_IPI		10
+ #define KVM_HC_SCHED_YIELD		11
+ #define KVM_HC_MAP_GPA_RANGE		12
++#define KVM_HC_VM_PLANES_CONFIG		13
++#define KVM_HC_VM_PLANES_ACTIVATE	14
++#define KVM_HC_VBS_VTL_CALL		15
+ 
+ /*
+  * hypercalls use architecture specific
+diff --git a/include/system/kvm_int.h b/include/system/kvm_int.h
+index 70b381f1ba..e7c9dc95a2 100644
+--- a/include/system/kvm_int.h
++++ b/include/system/kvm_int.h
+@@ -109,6 +109,19 @@ struct KVMPlane {
+     bool vcpu_dirty;
+ };
+ 
++/* Per-plane VM state managed by LVBS hypercall handlers.
++ * The plane fd itself is owned by the accel layer and accessed via
++ * kvm_get_plane_fd(s, plane_id); only LVBS-specific state lives here. */
++struct kvm_vm_plane_state {
++    int *vcpu_fds;
++    unsigned int vcpu_count;
++    uint64_t load_offset;
++    uint64_t memory_size;
++    uint64_t entry_point;
++    void *host_addr;        /* host pointer to plane RAM (cleared after launch) */
++    char cmdline[512];
++};
++
+ struct KVMState
+ {
+     AccelState parent_obj;
+@@ -176,6 +189,10 @@ struct KVMState
+     uint16_t xen_evtchn_max_pirq;
+     char *device;
+     OnOffAuto honor_guest_pat;
++    /* VM planes state (populated by LVBS hypercall handlers) */
++    struct kvm_vm_plane_state *vm_planes;
++    unsigned int vm_plane_count;
++    unsigned int vm_planes_max;
+ };
+ 
+ static inline void kvm_set_plane_fd(KVMState *s, unsigned plane, int fd)
+diff --git a/linux-headers/linux/kvm.h b/linux-headers/linux/kvm.h
+index 8caa3eccce..d66ce6d272 100644
+--- a/linux-headers/linux/kvm.h
++++ b/linux-headers/linux/kvm.h
+@@ -1654,6 +1654,9 @@ struct kvm_memory_attributes {
+ 
+ #define KVM_MEMORY_ATTRIBUTE_PRIVATE           (1ULL << 3)
+ 
++#define KVM_MEMORY_ATTRIBUTE_NO_WRITE          (1ULL << 4)
++#define KVM_MEMORY_ATTRIBUTE_NO_EXEC           (1ULL << 5)
++
+ #define KVM_CREATE_GUEST_MEMFD	_IOWR(KVMIO,  0xd4, struct kvm_create_guest_memfd)
+ #define GUEST_MEMFD_FLAG_MMAP		(1ULL << 0)
+ #define GUEST_MEMFD_FLAG_INIT_SHARED	(1ULL << 1)
+diff --git a/target/i386/kvm/kvm.c b/target/i386/kvm/kvm.c
+index 13cfa60071..9d89e5cac6 100644
+--- a/target/i386/kvm/kvm.c
++++ b/target/i386/kvm/kvm.c
+@@ -71,6 +71,13 @@
+ #include "exec/memattrs.h"
+ #include "exec/target_page.h"
+ #include "trace.h"
++#include "system/address-spaces.h"
++#include "system/memory.h"
++#include "qemu/thread.h"
++#include "qemu/timer.h"
++#include <fcntl.h>
++#include <unistd.h>
++#include <sys/mman.h>
+ 
+ #include CONFIG_DEVICES
+ 
+@@ -3588,6 +3595,13 @@ int kvm_arch_init(MachineState *ms, KVMState *s)
+         kvm_vmfd_add_change_notifier(&kvm_vmfd_change_notifier);
+     }
+ 
++    /* Enable userspace exit for VM planes and VBS hypercalls (LVBS). */
++    if (!kvm_enable_hypercall(BIT_ULL(KVM_HC_VM_PLANES_CONFIG) |
++                              BIT_ULL(KVM_HC_VM_PLANES_ACTIVATE) |
++                              BIT_ULL(KVM_HC_VBS_VTL_CALL))) {
++        warn_report("kvm: failed to enable VM planes / VBS hypercall exit");
++    }
++
+     /*
+      * Most x86 CPUs in current use have self-snoop, so honoring guest PAT is
+      * preferable.  As well, the bochs video driver bug which motivated making
+@@ -6519,10 +6533,772 @@ static int kvm_handle_hc_map_gpa_range(X86CPU *cpu, struct kvm_run *run)
+     return 0;
+ }
+ 
++/* ========================================================================
++ * LVBS — VM planes + VBS VTL hypercall handlers
++ *
++ * Guest-side struct vm_plane_config layout (672 bytes, see Linux
++ * include/linux/vm_planes.h):
++ *   off  0  u64  load_offset
++ *   off  8  u64  memory_size
++ *   off 16  u64  entry_point
++ *   off 24  u32  vcpu_count
++ *   off 28  u32  kernel_format
++ *   off 32  char kernel[128]
++ *   off 160 char cmdline[512]
++ * ======================================================================== */
++
++#define VM_PLANE_CFG_STRIDE     672
++
++#define VBS_CALL_INIT             0x0001
++#define VBS_CALL_SHUTDOWN         0x0002
++#define VBS_CALL_PROTECT_MEMORY   0x0100
++#define VBS_CALL_SEAL_KERNEL      0x0101
++#define VBS_CALL_VALIDATE_MODULE  0x0200
++#define VBS_CALL_SET_MODULE_PERMS 0x0201
++#define VBS_CALL_UNLOAD_MODULE    0x0202
++#define VBS_CALL_ADD_KEY          0x0300
++#define VBS_CALL_REVOKE_KEY       0x0301
++#define VBS_CALL_SEND_CERTS       0x0302
++#define VBS_CALL_KEXEC_VALIDATE   0x0400
++#define VBS_CALL_KEXEC_INVALIDATE 0x0401
++
++#define CA_OFF_CALL_ID    4
++#define CA_OFF_STATUS     8
++#define CA_OFF_ARG_SIZE   12
++#define CA_OFF_RESP_SIZE  16
++#define CA_OFF_BUFFER     20
++
++struct vm_plane_boot_ctx {
++    int vcpu_fd;
++    int vcpu_mmap_size;
++    unsigned int vcpu_idx;
++    uint64_t plane_id;
++    unsigned int *halted_count;
++    QemuMutex *mutex;
++    QemuCond *cond;
++    int result;
++    int log_fd;
++    QemuMutex wake_mutex;
++    QemuCond wake_cond;
++    bool halted;
++    bool kick;
++    bool stopped;
++};
++
++static int kvm_handle_hc_vm_planes_config(X86CPU *cpu, struct kvm_run *run)
++{
++    uint64_t gpa = run->hypercall.args[0];
++    uint64_t plane_count = run->hypercall.args[1];
++    uint64_t plane_id;
++    unsigned int plane0_vcpu_count;
++    unsigned int *plane0_vcpu_ids;
++    CPUState *cs;
++    KVMState *s = kvm_state;
++
++    if (!gpa || !plane_count) {
++        run->hypercall.ret = -EINVAL;
++        return 0;
++    }
++
++    if (!s->vm_planes_max) {
++        int max = kvm_vm_ioctl(s, KVM_CHECK_EXTENSION, KVM_CAP_PLANES);
++        if (max <= 0) {
++            error_report("vm_planes: KVM does not support planes");
++            run->hypercall.ret = -ENOTSUP;
++            return 0;
++        }
++        s->vm_planes_max = max;
++    }
++
++    if (plane_count > s->vm_planes_max) {
++        error_report("vm_planes: requested %" PRIu64 " planes but KVM "
++                     "supports %u", plane_count, s->vm_planes_max);
++        run->hypercall.ret = -EINVAL;
++        return 0;
++    }
++
++    if (s->vm_planes) {
++        info_report("vm_planes: already configured, ignoring");
++        run->hypercall.ret = 0;
++        return 0;
++    }
++
++    s->vm_planes = g_new0(struct kvm_vm_plane_state, plane_count);
++    s->vm_plane_count = plane_count;
++
++    plane0_vcpu_count = 0;
++    CPU_FOREACH(cs) {
++        plane0_vcpu_count++;
++    }
++    if (!plane0_vcpu_count) {
++        error_report("vm_planes: no plane0 vCPUs available");
++        run->hypercall.ret = -EINVAL;
++        return 0;
++    }
++
++    plane0_vcpu_ids = g_new(unsigned int, plane0_vcpu_count);
++    plane0_vcpu_count = 0;
++    CPU_FOREACH(cs) {
++        plane0_vcpu_ids[plane0_vcpu_count++] = cs->cpu_index;
++    }
++
++    for (plane_id = 1; plane_id < plane_count; plane_id++) {
++        uint64_t plane_gpa = gpa + (plane_id * VM_PLANE_CFG_STRIDE);
++        uint64_t load_offset = 0, memory_size = 0, entry_point = 0;
++        uint32_t vcpu_count = 0;
++        struct kvm_vm_plane_state *ps = &s->vm_planes[plane_id];
++        char cmdline_buf[512];
++        MemoryRegionSection section;
++        int plane_fd;
++        unsigned int i;
++
++        cpu_physical_memory_read(plane_gpa + 0,  &load_offset, 8);
++        cpu_physical_memory_read(plane_gpa + 8,  &memory_size, 8);
++        cpu_physical_memory_read(plane_gpa + 16, &entry_point, 8);
++        cpu_physical_memory_read(plane_gpa + 24, &vcpu_count,  4);
++
++        if (!memory_size || !vcpu_count) {
++            error_report("vm_planes: plane %" PRIu64 " invalid "
++                         "(load_offset=0x%" PRIx64 " size=0x%" PRIx64
++                         " vcpus=%u)",
++                         plane_id, load_offset, memory_size, vcpu_count);
++            g_free(plane0_vcpu_ids);
++            run->hypercall.ret = -EINVAL;
++            return 0;
++        }
++
++        if (vcpu_count > plane0_vcpu_count) {
++            error_report("vm_planes: plane %" PRIu64 " requests %u vCPUs, "
++                         "but plane0 has %u", plane_id, vcpu_count,
++                         plane0_vcpu_count);
++            g_free(plane0_vcpu_ids);
++            run->hypercall.ret = -EINVAL;
++            return 0;
++        }
++
++        memset(cmdline_buf, 0, sizeof(cmdline_buf));
++        cpu_physical_memory_read(plane_gpa + 160, cmdline_buf,
++                                 sizeof(cmdline_buf));
++        cmdline_buf[sizeof(cmdline_buf) - 1] = '\0';
++        memcpy(ps->cmdline, cmdline_buf, sizeof(ps->cmdline));
++
++        plane_fd = kvm_vm_ioctl(s, KVM_CREATE_PLANE, (int)plane_id);
++        if (plane_fd < 0) {
++            error_report("vm_planes: KVM_CREATE_PLANE plane %" PRIu64
++                         " failed: %s", plane_id, strerror(errno));
++            g_free(plane0_vcpu_ids);
++            run->hypercall.ret = -errno;
++            return 0;
++        }
++        /* The kvm_vm_plane_ioctl path looks up the plane fd via
++         * kvm_get_plane_fd / kvm_set_plane_fd, so register the fd. */
++        kvm_set_plane_fd(s, plane_id, plane_fd);
++
++        section = memory_region_find(get_system_memory(),
++                                     load_offset, memory_size);
++        if (!section.mr || !memory_region_is_ram(section.mr)) {
++            error_report("vm_planes: plane %" PRIu64 " GPA 0x%" PRIx64
++                         " size 0x%" PRIx64 " is not RAM",
++                         plane_id, load_offset, memory_size);
++            if (section.mr) {
++                memory_region_unref(section.mr);
++            }
++            close(plane_fd);
++            kvm_set_plane_fd(s, plane_id, -1);
++            g_free(plane0_vcpu_ids);
++            run->hypercall.ret = -ENOMEM;
++            return 0;
++        }
++        ps->host_addr = memory_region_get_ram_ptr(section.mr) +
++                        section.offset_within_region;
++        memory_region_unref(section.mr);
++
++        ps->vcpu_fds = g_new0(int, vcpu_count);
++        for (i = 0; i < vcpu_count; i++) {
++            int vcpu_fd;
++            unsigned int vcpu_id = plane0_vcpu_ids[i];
++
++            vcpu_fd = kvm_vm_plane_ioctl(s, plane_id, KVM_CREATE_VCPU,
++                                         (void *)(uintptr_t)vcpu_id);
++            if (vcpu_fd < 0) {
++                error_report("vm_planes: KVM_CREATE_VCPU plane %" PRIu64
++                             " vcpu %u failed: %s",
++                             plane_id, vcpu_id, strerror(errno));
++                close(plane_fd);
++                kvm_set_plane_fd(s, plane_id, -1);
++                g_free(plane0_vcpu_ids);
++                run->hypercall.ret = -errno;
++                return 0;
++            }
++
++            ps->vcpu_fds[i] = vcpu_fd;
++        }
++
++        ps->vcpu_count  = vcpu_count;
++        ps->load_offset = load_offset;
++        ps->memory_size = memory_size;
++        ps->entry_point = entry_point;
++
++        info_report("vm_planes: plane %" PRIu64 " ready — GPA 0x%" PRIx64
++                    " size 0x%" PRIx64 " entry 0x%" PRIx64 " vcpus %u",
++                    plane_id, load_offset, memory_size, entry_point,
++                    vcpu_count);
++    }
++
++    g_free(plane0_vcpu_ids);
++    run->hypercall.ret = 0;
++    return 0;
++}
++
++static int kvm_init_plane_vcpu(int vcpu_fd, uint64_t entry_addr,
++                               uint64_t stack_addr, uint64_t zero_page_gpa,
++                               uint64_t page_table_gpa, uint64_t gdt_gpa,
++                               bool is_bsp)
++{
++    struct kvm_regs regs = {};
++    struct kvm_sregs sregs = {};
++    struct kvm_mp_state mp = {
++        .mp_state = is_bsp ? KVM_MP_STATE_RUNNABLE
++                           : KVM_MP_STATE_INIT_RECEIVED,
++    };
++    int ret;
++
++    sregs.cs.base = 0; sregs.cs.limit = 0xffffffff; sregs.cs.selector = 0x10;
++    sregs.cs.type = 0xb; sregs.cs.present = 1; sregs.cs.dpl = 0;
++    sregs.cs.db = 0; sregs.cs.s = 1; sregs.cs.l = 1; sregs.cs.g = 1;
++
++    sregs.ds.base = 0; sregs.ds.limit = 0xffffffff; sregs.ds.selector = 0x18;
++    sregs.ds.type = 0x3; sregs.ds.present = 1; sregs.ds.dpl = 0;
++    sregs.ds.db = 1; sregs.ds.s = 1; sregs.ds.g = 1;
++    sregs.es = sregs.ds;
++    sregs.ss = sregs.ds;
++    sregs.fs = sregs.ds; sregs.fs.selector = 0;
++    sregs.gs = sregs.fs;
++
++    sregs.gdt.base = gdt_gpa; sregs.gdt.limit = 0x2f;
++    sregs.idt.base = 0;       sregs.idt.limit = 0xffff;
++    sregs.tr.base = 0; sregs.tr.limit = 0x67; sregs.tr.selector = 0x28;
++    sregs.tr.type = 0xb; sregs.tr.present = 1; sregs.tr.dpl = 0; sregs.tr.s = 0;
++    sregs.ldt.unusable = 1;
++
++    sregs.cr3 = page_table_gpa;
++    sregs.cr4 = (1u << 5);  /* PAE */
++    sregs.cr0 = (1u << 0) | (1u << 4) | (1u << 5) | (1u << 16) | (1u << 31);
++    sregs.efer = (1u << 0) | (1u << 8) | (1u << 10) | (1u << 11);
++    sregs.apic_base = 0xfee00000 | (1u << 11);
++    if (is_bsp) {
++        sregs.apic_base |= (1u << 8);
++    }
++
++    ret = ioctl(vcpu_fd, KVM_SET_SREGS, &sregs);
++    if (ret < 0) {
++        error_report("vm_planes: KVM_SET_SREGS: %s", strerror(errno));
++        return -errno;
++    }
++
++    regs.rip = entry_addr;
++    regs.rsp = stack_addr;
++    regs.rsi = zero_page_gpa;
++    regs.rflags = 0x2;
++    ret = ioctl(vcpu_fd, KVM_SET_REGS, &regs);
++    if (ret < 0) {
++        error_report("vm_planes: KVM_SET_REGS: %s", strerror(errno));
++        return -errno;
++    }
++
++    ret = ioctl(vcpu_fd, KVM_SET_MP_STATE, &mp);
++    if (ret < 0) {
++        error_report("vm_planes: KVM_SET_MP_STATE: %s", strerror(errno));
++        return -errno;
++    }
++    return 0;
++}
++
++static void *vm_plane_vcpu_thread(void *arg)
++{
++    struct vm_plane_boot_ctx *ctx = arg;
++    struct kvm_run *kvm_run;
++    int ret;
++    bool boot_signaled = false;
++
++    kvm_run = mmap(NULL, ctx->vcpu_mmap_size, PROT_READ | PROT_WRITE,
++                   MAP_SHARED, ctx->vcpu_fd, 0);
++    if (kvm_run == MAP_FAILED) {
++        error_report("vm_planes: plane %" PRIu64 " vcpu %u: mmap failed: %s",
++                     ctx->plane_id, ctx->vcpu_idx, strerror(errno));
++        ctx->result = -errno;
++        qemu_mutex_lock(ctx->mutex);
++        (*ctx->halted_count)++;
++        qemu_cond_signal(ctx->cond);
++        qemu_mutex_unlock(ctx->mutex);
++        return NULL;
++    }
++
++    for (;;) {
++        ret = ioctl(ctx->vcpu_fd, KVM_RUN, 0);
++        if (ret < 0) {
++            if (errno == EINTR || errno == EAGAIN) {
++                continue;
++            }
++            error_report("vm_planes: plane %" PRIu64 " vcpu %u: KVM_RUN: %s",
++                         ctx->plane_id, ctx->vcpu_idx, strerror(errno));
++            ctx->result = -errno;
++            break;
++        }
++
++        switch (kvm_run->exit_reason) {
++        case KVM_EXIT_HLT:
++            if (!boot_signaled) {
++                boot_signaled = true;
++                qemu_mutex_lock(ctx->mutex);
++                (*ctx->halted_count)++;
++                qemu_cond_signal(ctx->cond);
++                qemu_mutex_unlock(ctx->mutex);
++            }
++            qemu_mutex_lock(&ctx->wake_mutex);
++            ctx->halted = true;
++            while (!ctx->kick && !ctx->stopped) {
++                qemu_cond_wait(&ctx->wake_cond, &ctx->wake_mutex);
++            }
++            ctx->halted = false;
++            ctx->kick = false;
++            if (ctx->stopped) {
++                qemu_mutex_unlock(&ctx->wake_mutex);
++                goto done;
++            }
++            qemu_mutex_unlock(&ctx->wake_mutex);
++            break;
++
++        case KVM_EXIT_IO: {
++            uint8_t *io_data = (uint8_t *)kvm_run + kvm_run->io.data_offset;
++            size_t io_size = kvm_run->io.size * kvm_run->io.count;
++            uint16_t port = kvm_run->io.port;
++
++            if (kvm_run->io.direction == KVM_EXIT_IO_OUT) {
++                if (port == 0x3f8 && ctx->log_fd >= 0) {
++                    ssize_t w = write(ctx->log_fd, io_data, io_size);
++                    (void)w;
++                }
++            } else {
++                memset(io_data, 0, io_size);
++                switch (port) {
++                case 0x3fa: memset(io_data, 0xc1, io_size); break;
++                case 0x3fb: memset(io_data, 0x03, io_size); break;
++                case 0x3fc: memset(io_data, 0x08, io_size); break;
++                case 0x3fd: memset(io_data, 0x60, io_size); break;
++                case 0x3fe: memset(io_data, 0xb0, io_size); break;
++                default: break;
++                }
++            }
++            usleep(100);
++            break;
++        }
++
++        case KVM_EXIT_MMIO:
++            usleep(100);
++            break;
++
++        case KVM_EXIT_SHUTDOWN: {
++            struct kvm_regs dbg = {};
++            ioctl(ctx->vcpu_fd, KVM_GET_REGS, &dbg);
++            error_report("vm_planes: plane %" PRIu64 " vcpu %u: shutdown "
++                         "RIP=0x%" PRIx64 " RSP=0x%" PRIx64,
++                         ctx->plane_id, ctx->vcpu_idx,
++                         (uint64_t)dbg.rip, (uint64_t)dbg.rsp);
++            ctx->result = -EFAULT;
++            goto done;
++        }
++
++        case KVM_EXIT_FAIL_ENTRY:
++            error_report("vm_planes: plane %" PRIu64 " vcpu %u: entry failure "
++                         "0x%" PRIx64, ctx->plane_id, ctx->vcpu_idx,
++                         (uint64_t)kvm_run->fail_entry.hardware_entry_failure_reason);
++            ctx->result = -EFAULT;
++            goto done;
++
++        case KVM_EXIT_INTERNAL_ERROR:
++            error_report("vm_planes: plane %" PRIu64 " vcpu %u: internal "
++                         "error %u", ctx->plane_id, ctx->vcpu_idx,
++                         kvm_run->internal.suberror);
++            ctx->result = -EFAULT;
++            goto done;
++
++        default:
++            error_report("vm_planes: plane %" PRIu64 " vcpu %u: unexpected "
++                         "exit %u", ctx->plane_id, ctx->vcpu_idx,
++                         kvm_run->exit_reason);
++            ctx->result = -EFAULT;
++            goto done;
++        }
++    }
++
++done:
++    if (ctx->log_fd >= 0 && ctx->vcpu_idx == 0) {
++        close(ctx->log_fd);
++    }
++    munmap(kvm_run, ctx->vcpu_mmap_size);
++    qemu_mutex_lock(ctx->mutex);
++    if (!boot_signaled) {
++        (*ctx->halted_count)++;
++        qemu_cond_signal(ctx->cond);
++    }
++    qemu_mutex_unlock(ctx->mutex);
++    return NULL;
++}
++
++static int kvm_handle_hc_vm_planes_activate(X86CPU *cpu, struct kvm_run *run)
++{
++    uint64_t gpa = run->hypercall.args[0];
++    uint64_t plane_count = run->hypercall.args[1];
++    uint64_t plane_id;
++    KVMState *s = kvm_state;
++    int vcpu_mmap_size;
++
++    if (!gpa || !plane_count || !s->vm_planes ||
++        plane_count != s->vm_plane_count) {
++        run->hypercall.ret = -EINVAL;
++        return 0;
++    }
++
++    vcpu_mmap_size = kvm_ioctl(s, KVM_GET_VCPU_MMAP_SIZE, 0);
++    if (vcpu_mmap_size <= 0) {
++        error_report("vm_planes: KVM_GET_VCPU_MMAP_SIZE failed");
++        run->hypercall.ret = -EINVAL;
++        return 0;
++    }
++
++    for (plane_id = 1; plane_id < plane_count; plane_id++) {
++        struct kvm_vm_plane_state *ps = &s->vm_planes[plane_id];
++        uint64_t stack_addr;
++        uint64_t entry_point = 0;
++        uint64_t cmdline_gpa, zero_page_gpa;
++        uint64_t pt_base, pml4_gpa, pdpt_gpa, pd_base, gdt_gpa_val;
++        struct vm_plane_boot_ctx *ctxs;
++        QemuThread *threads;
++        QemuMutex mutex;
++        QemuCond cond;
++        unsigned int halted_count = 0;
++        unsigned int i;
++        int plane_log_fd = -1;
++
++        if (kvm_get_plane_fd(s, plane_id) < 0 || !ps->vcpu_count ||
++            !ps->host_addr) {
++            error_report("vm_planes: plane %" PRIu64 " not configured",
++                         plane_id);
++            run->hypercall.ret = -EINVAL;
++            return 0;
++        }
++
++        cpu_physical_memory_read(gpa + (plane_id * VM_PLANE_CFG_STRIDE) + 16,
++                                 &entry_point, 8);
++        if (!entry_point) {
++            error_report("vm_planes: plane %" PRIu64 " bad entry_point",
++                         plane_id);
++            run->hypercall.ret = -EIO;
++            return 0;
++        }
++        ps->entry_point = entry_point;
++
++        stack_addr     = ps->load_offset + ps->memory_size;
++        cmdline_gpa    = stack_addr - 0x1000;
++        zero_page_gpa  = stack_addr - 0x2000;
++        pt_base        = ps->load_offset + ps->memory_size - 0x10000;
++        pml4_gpa       = pt_base;
++        pdpt_gpa       = pt_base + 0x1000;
++        pd_base        = pt_base + 0x2000;
++        gdt_gpa_val    = pt_base + 0x6000;
++
++#define PLANE_HOST(g) ((uint8_t *)ps->host_addr + ((g) - ps->load_offset))
++
++        /* cmdline */
++        {
++            size_t cl = strlen(ps->cmdline) + 1;
++            memcpy(PLANE_HOST(cmdline_gpa), ps->cmdline, cl);
++        }
++
++        /* boot_params zero page */
++        {
++            uint8_t zp[4096] = {};
++            uint32_t cl_ptr = (uint32_t)(cmdline_gpa & 0xffffffff);
++            uint32_t cl_hi  = (uint32_t)(cmdline_gpa >> 32);
++            struct {
++                uint64_t addr;
++                uint64_t size;
++                uint32_t type;
++            } QEMU_PACKED e820 = {
++                ps->load_offset, ps->memory_size, 1,
++            };
++
++            zp[0x1fe] = 0x55; zp[0x1ff] = 0xAA;
++            zp[0x202] = 'H'; zp[0x203] = 'd';
++            zp[0x204] = 'r'; zp[0x205] = 'S';
++            zp[0x206] = 0x0f; zp[0x207] = 0x02;
++            zp[0x210] = 0xff;
++            memcpy(&zp[0x228], &cl_ptr, 4);
++            memcpy(&zp[0x0c8], &cl_hi, 4);
++            zp[0x1e8] = 1;
++            memcpy(&zp[0x2d0], &e820, 20);
++            memcpy(PLANE_HOST(zero_page_gpa), zp, sizeof(zp));
++        }
++
++        /* Identity-mapped page tables (PML4 → PDPT → 4×PD with 2MB pages) */
++        {
++            uint8_t page[4096];
++            uint64_t *entries;
++            int pd_idx;
++
++            memset(page, 0, sizeof(page));
++            entries = (uint64_t *)page;
++            entries[0] = pdpt_gpa | 0x3;
++            memcpy(PLANE_HOST(pml4_gpa), page, 4096);
++
++            memset(page, 0, sizeof(page));
++            entries = (uint64_t *)page;
++            for (pd_idx = 0; pd_idx < 4; pd_idx++) {
++                entries[pd_idx] = (pd_base + pd_idx * 0x1000) | 0x3;
++            }
++            memcpy(PLANE_HOST(pdpt_gpa), page, 4096);
++
++            for (pd_idx = 0; pd_idx < 4; pd_idx++) {
++                int j;
++                memset(page, 0, sizeof(page));
++                entries = (uint64_t *)page;
++                for (j = 0; j < 512; j++) {
++                    uint64_t phys = ((uint64_t)pd_idx << 30) |
++                                    ((uint64_t)j << 21);
++                    entries[j] = phys | 0x83;
++                }
++                memcpy(PLANE_HOST(pd_base + pd_idx * 0x1000), page, 4096);
++            }
++        }
++
++        /* Minimal GDT */
++        {
++            uint8_t gdt[48] = {};
++            uint64_t *gdt64 = (uint64_t *)gdt;
++
++            gdt64[0] = 0;
++            gdt64[1] = 0;
++            gdt64[2] = 0x00af9a000000ffffULL;
++            gdt64[3] = 0x00cf92000000ffffULL;
++            gdt64[4] = 0;
++            gdt64[5] = 0x0000890000000067ULL;
++            memcpy(PLANE_HOST(gdt_gpa_val), gdt, sizeof(gdt));
++        }
++
++        /* Initialize all plane vCPUs */
++        for (i = 0; i < ps->vcpu_count; i++) {
++            int ret = kvm_init_plane_vcpu(ps->vcpu_fds[i], entry_point,
++                                          stack_addr, zero_page_gpa, pml4_gpa,
++                                          gdt_gpa_val, i == 0);
++            if (ret) {
++                error_report("vm_planes: init plane %" PRIu64 " vcpu %u "
++                             "failed", plane_id, i);
++                run->hypercall.ret = ret;
++                return 0;
++            }
++        }
++#undef PLANE_HOST
++
++        /* Serial log */
++        {
++            char lp[256];
++            snprintf(lp, sizeof(lp), "/tmp/plane%" PRIu64 "-serial.log",
++                     plane_id);
++            plane_log_fd = open(lp, O_CREAT | O_WRONLY | O_TRUNC, 0644);
++        }
++
++        /* Spawn vCPU threads */
++        qemu_mutex_init(&mutex);
++        qemu_cond_init(&cond);
++
++        ctxs = g_new0(struct vm_plane_boot_ctx, ps->vcpu_count);
++        threads = g_new0(QemuThread, ps->vcpu_count);
++
++        for (i = 0; i < ps->vcpu_count; i++) {
++            char name[48];
++
++            ctxs[i].vcpu_fd        = ps->vcpu_fds[i];
++            ctxs[i].vcpu_mmap_size = vcpu_mmap_size;
++            ctxs[i].vcpu_idx       = i;
++            ctxs[i].plane_id       = plane_id;
++            ctxs[i].halted_count   = &halted_count;
++            ctxs[i].mutex          = &mutex;
++            ctxs[i].cond           = &cond;
++            ctxs[i].result         = 0;
++            ctxs[i].log_fd         = (i == 0) ? plane_log_fd : -1;
++            qemu_mutex_init(&ctxs[i].wake_mutex);
++            qemu_cond_init(&ctxs[i].wake_cond);
++            ctxs[i].halted  = false;
++            ctxs[i].kick    = false;
++            ctxs[i].stopped = false;
++
++            snprintf(name, sizeof(name), "plane%" PRIu64 "-vcpu%u",
++                     plane_id, i);
++            qemu_thread_create(&threads[i], name, vm_plane_vcpu_thread,
++                               &ctxs[i], QEMU_THREAD_JOINABLE);
++        }
++
++        /* Wait up to 5s for plane to reach first HLT */
++        {
++            int64_t dl = qemu_clock_get_ns(QEMU_CLOCK_REALTIME) +
++                         5LL * 1000000000LL;
++            qemu_mutex_lock(&mutex);
++            while (halted_count < ps->vcpu_count) {
++                int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
++                if (now >= dl) {
++                    info_report("vm_planes: plane %" PRIu64 " boot timeout "
++                                "(%u/%u halted)", plane_id, halted_count,
++                                ps->vcpu_count);
++                    break;
++                }
++                qemu_cond_timedwait(&cond, &mutex, 1000);
++            }
++            qemu_mutex_unlock(&mutex);
++        }
++
++        /* Note: threads keep running for the plane's lifetime; we
++         * intentionally leak ctxs/threads — they outlive this call. */
++
++        /* Seal plane memory via KVM_SET_MEMORY_ATTRIBUTES(NO_WRITE|NO_EXEC) */
++        {
++            struct kvm_memory_attributes ma = {
++                .address    = ps->load_offset,
++                .size       = ps->memory_size,
++                .attributes = KVM_MEMORY_ATTRIBUTE_NO_WRITE |
++                              KVM_MEMORY_ATTRIBUTE_NO_EXEC,
++                .flags      = 0,
++            };
++            int pr = kvm_vm_ioctl(s, KVM_SET_MEMORY_ATTRIBUTES, &ma);
++            if (pr < 0) {
++                warn_report("vm_planes: plane %" PRIu64 " seal failed (%d)",
++                            plane_id, pr);
++            } else {
++                info_report("vm_planes: plane %" PRIu64 " memory sealed",
++                            plane_id);
++            }
++        }
++        ps->host_addr = NULL;
++
++        info_report("vm_planes: plane %" PRIu64 " launched — entry 0x%" PRIx64
++                    " vcpus %u", plane_id, entry_point, ps->vcpu_count);
++    }
++
++    run->hypercall.ret = 0;
++    return 0;
++}
++
++static int vbs_apply_protection(KVMState *s, uint64_t gpa, uint64_t size,
++                                uint32_t perms)
++{
++    uint64_t attrs = 0;
++    struct kvm_memory_attributes ma;
++
++    if (!(perms & 2)) {
++        attrs |= KVM_MEMORY_ATTRIBUTE_NO_WRITE;
++    }
++    if (!(perms & 4)) {
++        attrs |= KVM_MEMORY_ATTRIBUTE_NO_EXEC;
++    }
++    if (!attrs) {
++        return 0;
++    }
++
++    ma.address    = gpa;
++    ma.size       = size;
++    ma.attributes = attrs;
++    ma.flags      = 0;
++    return kvm_vm_ioctl(s, KVM_SET_MEMORY_ATTRIBUTES, &ma);
++}
++
++static int32_t vbs_handle_protect_memory(KVMState *s, uint64_t ca_gpa)
++{
++    uint64_t gpa, size;
++    uint32_t perms, arg_size;
++
++    cpu_physical_memory_read(ca_gpa + CA_OFF_ARG_SIZE, &arg_size, 4);
++    if (arg_size < 24) {
++        return -22;
++    }
++    cpu_physical_memory_read(ca_gpa + CA_OFF_BUFFER + 0,  &gpa,   8);
++    cpu_physical_memory_read(ca_gpa + CA_OFF_BUFFER + 8,  &size,  8);
++    cpu_physical_memory_read(ca_gpa + CA_OFF_BUFFER + 16, &perms, 4);
++    return vbs_apply_protection(s, gpa, size, perms);
++}
++
++static int32_t vbs_handle_seal_kernel(KVMState *s, uint64_t ca_gpa)
++{
++    uint64_t text_gpa, text_size, rodata_gpa, rodata_size;
++    uint32_t arg_size;
++    int ret;
++
++    cpu_physical_memory_read(ca_gpa + CA_OFF_ARG_SIZE, &arg_size, 4);
++    if (arg_size < 40) {
++        return -22;
++    }
++    cpu_physical_memory_read(ca_gpa + CA_OFF_BUFFER + 0,  &text_gpa,    8);
++    cpu_physical_memory_read(ca_gpa + CA_OFF_BUFFER + 8,  &text_size,   8);
++    cpu_physical_memory_read(ca_gpa + CA_OFF_BUFFER + 16, &rodata_gpa,  8);
++    cpu_physical_memory_read(ca_gpa + CA_OFF_BUFFER + 24, &rodata_size, 8);
++
++    ret = vbs_apply_protection(s, text_gpa, text_size, 1 | 4);
++    if (ret < 0) {
++        return ret;
++    }
++    return vbs_apply_protection(s, rodata_gpa, rodata_size, 1);
++}
++
++static int kvm_handle_hc_vbs_vtl_call(X86CPU *cpu, struct kvm_run *run)
++{
++    uint64_t ca_gpa = run->hypercall.args[0];
++    uint32_t call_id;
++    int32_t status;
++    KVMState *s = kvm_state;
++
++    cpu_physical_memory_read(ca_gpa + CA_OFF_CALL_ID, &call_id, 4);
++
++    switch (call_id) {
++    case VBS_CALL_INIT:
++    case VBS_CALL_SHUTDOWN:
++        status = 0;
++        break;
++    case VBS_CALL_PROTECT_MEMORY:
++        status = vbs_handle_protect_memory(s, ca_gpa);
++        break;
++    case VBS_CALL_SEAL_KERNEL:
++        status = vbs_handle_seal_kernel(s, ca_gpa);
++        break;
++    case VBS_CALL_VALIDATE_MODULE:
++    case VBS_CALL_SET_MODULE_PERMS:
++    case VBS_CALL_UNLOAD_MODULE:
++    case VBS_CALL_ADD_KEY:
++    case VBS_CALL_REVOKE_KEY:
++    case VBS_CALL_SEND_CERTS:
++    case VBS_CALL_KEXEC_VALIDATE:
++    case VBS_CALL_KEXEC_INVALIDATE:
++        status = 0;  /* acknowledge */
++        break;
++    default:
++        warn_report("vbs_vtl_call: unknown call_id 0x%04x", call_id);
++        status = -38;
++        break;
++    }
++
++    cpu_physical_memory_write(ca_gpa + CA_OFF_STATUS, &status, 4);
++    run->hypercall.ret = 0;
++    return 0;
++}
++
+ static int kvm_handle_hypercall(X86CPU *cpu, struct kvm_run *run)
+ {
+     if (run->hypercall.nr == KVM_HC_MAP_GPA_RANGE)
+         return kvm_handle_hc_map_gpa_range(cpu, run);
++    if (run->hypercall.nr == KVM_HC_VM_PLANES_CONFIG)
++        return kvm_handle_hc_vm_planes_config(cpu, run);
++    if (run->hypercall.nr == KVM_HC_VM_PLANES_ACTIVATE)
++        return kvm_handle_hc_vm_planes_activate(cpu, run);
++    if (run->hypercall.nr == KVM_HC_VBS_VTL_CALL)
++        return kvm_handle_hc_vbs_vtl_call(cpu, run);
+ 
+     return -EINVAL;
+ }
+-- 
+2.55.0
+

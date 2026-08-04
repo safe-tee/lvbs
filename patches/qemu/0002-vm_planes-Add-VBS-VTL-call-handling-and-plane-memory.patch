@@ -1,0 +1,63 @@
+From b0eb7301e42289cf406bd763f6fad53ee92dda40 Mon Sep 17 00:00:00 2001
+From: Sriram Nambakam <snambakam@linux.microsoft.com>
+Date: Thu, 7 May 2026 15:31:53 -0700
+Subject: [RFC PATCH v1 2/5] vm_planes: Add VBS VTL call handling and plane
+ memory sealing
+
+Wire up the VBS inter-plane communication and memory protection
+infrastructure on the QEMU side.
+
+Memory sealing (plane activate path):
+  After plane-1 boots and its vCPU threads are running, seal
+  plane-1's memory from plane-0 access:
+  1. Issue KVM_SET_PLANE_MEMORY_ATTRIBUTES to set NO_WRITE|NO_EXEC
+     on plane-0's EPT for the GPA range occupied by plane-1.
+  2. Clear ps->host_addr so QEMU userspace can no longer access
+     the region.
+
+VBS VTL hypercall handler:
+  Handle KVM_HC_VBS_VTL_CALL (hypercall 15) exits from the guest.
+  The plane-0 VBS subsystem passes the GPA of a shared calling-area
+  (CAA) page; QEMU reads the call_id from the page, logs it, and
+  returns -ENOSYS for now (plane-1 responder not yet implemented).
+  Enable the hypercall in kvm_enable_hypercall() alongside the
+  existing VM planes hypercalls.
+
+Header sync:
+  - linux-headers/linux/kvm.h: Add KVM_MEMORY_ATTRIBUTE_NO_WRITE,
+    KVM_MEMORY_ATTRIBUTE_NO_EXEC, struct kvm_plane_memory_attributes,
+    and KVM_SET_PLANE_MEMORY_ATTRIBUTES ioctl definition.
+  - include/standard-headers/linux/kvm_para.h: Add KVM_HC_VBS_VTL_CALL.
+
+(cherry picked from commit 414016c40ec8226b0f5d4cbd5eed0589b7c1689e)
+---
+ linux-headers/linux/kvm.h | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/linux-headers/linux/kvm.h b/linux-headers/linux/kvm.h
+index d66ce6d272..9dbd3824e9 100644
+--- a/linux-headers/linux/kvm.h
++++ b/linux-headers/linux/kvm.h
+@@ -1653,6 +1653,19 @@ struct kvm_memory_attributes {
+ };
+ 
+ #define KVM_MEMORY_ATTRIBUTE_PRIVATE           (1ULL << 3)
++#define KVM_MEMORY_ATTRIBUTE_NO_WRITE          (1ULL << 4)
++#define KVM_MEMORY_ATTRIBUTE_NO_EXEC           (1ULL << 5)
++
++/* Set memory attributes on a specific plane's address space. */
++struct kvm_plane_memory_attributes {
++	__u32 plane;
++	__u32 flags;
++	__u64 address;
++	__u64 size;
++	__u64 attributes;
++};
++
++#define KVM_SET_PLANE_MEMORY_ATTRIBUTES	_IOW(KVMIO, 0xd6, struct kvm_plane_memory_attributes)
+ 
+ #define KVM_MEMORY_ATTRIBUTE_NO_WRITE          (1ULL << 4)
+ #define KVM_MEMORY_ATTRIBUTE_NO_EXEC           (1ULL << 5)
+-- 
+2.55.0
+

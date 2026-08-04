@@ -1,36 +1,77 @@
-From 91b5c784170e51c0547957c27f2ba07863737257 Mon Sep 17 00:00:00 2001
+From d95c6ae9845891b59464b21d7b4f7c47eb489a96 Mon Sep 17 00:00:00 2001
 From: Sriram Nambakam <snambakam@linux.microsoft.com>
-Date: Tue, 12 May 2026 11:31:11 -0700
-Subject: [PATCH 00/11] *** SUBJECT HERE ***
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
+Date: Tue, 4 Aug 2026 16:28:37 -0700
+Subject: [RFC PATCH v1 0/5] VBS/VSM-on-KVM: QEMU support for the secure VM
+ plane
 
-*** BLURB HERE ***
+This RFC adds the QEMU support needed to run a Virtualization-Based
+Security (VBS), or Hyper-V VSM-style, secure environment using KVM VM
+Planes.  It is the QEMU counterpart to the Linux VBS/VSM-on-KVM series.
 
-Sriram Nambakam (11):
-  Introduce VM Plane support with KVM
-  Activate the planes configuration - allocate resources for each plane
-    - initialize planes in KVM
-  Iterate through each plane (id > 0) and load the kernel. - wait till
-    all the vCPUs associated with that plane halt
-  enable hypercalls related to vm planes
-  vm_planes: fix plane vCPU initialization and memory model
-  Remove comments specific to CONFIG_SMP - the kernel in plane 1 could
-    be build with CONFIG_SMP=y
+The five patches in this mail series are authored by me and add:
+
+  - userspace handlers for VM Plane and VBS VTL-call exits from KVM;
+  - the VBS VTL hypercall definitions from the Linux UAPI;
+  - loading and running the secure-plane kernel in-kernel; and
+  - plane configuration access through the QEMU address-space API.
+
+This series depends on the QEMU VM Planes infrastructure from Joerg
+Roedel and related prerequisite work.  Those patches are not duplicated
+in this mail series.  The integrated QEMU branch linked below contains
+the complete tree, including Joerg's patches and the other prerequisites,
+used for development and testing.
+
+The complete implementation is available in three repositories under the
+safe-tee organization:
+
+  QEMU support and complete integrated tree:
+  https://github.com/safe-tee/qemu/tree/qemu-planes-v11.1.0-rc1
+
+  Linux and KVM support:
+  https://github.com/safe-tee/linux/tree/kvm-planes-v7.2-rc5
+
+  Build, test, and integration tooling:
+  https://github.com/safe-tee/lvbs
+
+Current build and run instructions are maintained in the lvbs repository:
+
+  https://github.com/safe-tee/lvbs/blob/main/docs/how-to/how-to-build.md
+
+This is prototype code and is not yet intended for production use.
+Feedback on the QEMU integration, VTL-call handling, and division of
+responsibility between QEMU and the in-kernel VM Plane implementation
+would be appreciated.
+
+Acknowledgments
+===============
+
+This work stands on top of, and is indebted to, several prior efforts:
+
+  - Joerg Roedel, whose QEMU and KVM VM Planes work provides the
+    infrastructure that the VBS/VSM secure plane relies on.
+
+  - Paolo Bonzini, whose "[RFC PATCH 00/29] KVM: VM planes" introduced
+    the VM Plane concept to KVM as a common in-kernel model for AMD VMPLs,
+    Intel TDX partitions, Hyper-V VTLs, and Arm CCA planes.
+    https://lwn.net/Articles/1016113/
+
+  - James Bottomley and James Morris, for their ongoing VSM-on-KVM work,
+    which informed the design and direction of this series.
+
+Sriram Nambakam (5):
+  kvm: add userspace handlers for VM planes and VBS VTL calls
   vm_planes: Add VBS VTL call handling and plane memory sealing
-  vm_planes: Implement VBS SEAL_KERNEL and PROTECT_MEMORY dispatchers
-  vm_planes: Add module authentication handlers for VBS VTL calls
-  vm_planes: Add kexec validation and invalidation VBS handlers
-  update definition for KVM_CAP_VM_PLANES - match definition in kernel
+  linux-headers: sync kvm_para.h VBS VTL hypercalls
+  target/i386/kvm: run the secure plane in-kernel (Option B)
+  target/i386/kvm: read plane config via address_space API
 
- accel/kvm/kvm-all.c                       |   24 +
- include/standard-headers/linux/kvm_para.h |    5 +-
- include/system/kvm_int.h                  |   14 +
- linux-headers/linux/kvm.h                 |   13 +
- target/i386/kvm/kvm.c                     | 1393 +++++++++++++++++++++
- 5 files changed, 1448 insertions(+), 1 deletion(-)
+ accel/kvm/kvm-all.c                       |  18 +
+ include/standard-headers/linux/kvm_para.h |   7 +-
+ include/system/kvm_int.h                  |  18 +
+ linux-headers/linux/kvm.h                 |  16 +
+ target/i386/kvm/kvm.c                     | 561 ++++++++++++++++++++++
+ 5 files changed, 619 insertions(+), 1 deletion(-)
 
 -- 
-2.53.0
+2.55.0
 
