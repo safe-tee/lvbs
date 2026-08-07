@@ -83,6 +83,10 @@ VTL1_CMDLINE="$VTL1_CMDLINE_DEFAULT"
 
 VTL1_INITRD_DEST_REL="boot/plane-${VTL1_TARGET_PLANE}/vmlinux"
 CONFIG_VM_PLANES_REL="config-vm-planes"
+# Marker consumed at boot by the kernel VBS enable path (security/vbs/core.c),
+# which reads /boot/Kconfig.kvm-planes and loads plane-1 only if it advertises
+# CONFIG_VM_PLANES=y.
+KCONFIG_KVM_PLANES_REL="boot/Kconfig.kvm-planes"
 DRACUT_CONF_REL="etc/dracut.conf.d/50-lvbs-vtl1.conf"
 MKOSI_EXTRA_DIR="$IMAGE_DIR/mkosi.extra"
 
@@ -99,6 +103,7 @@ if [ "${1:-build}" = "clean" ]; then
 	rm -rf "$MKOSI_EXTRA_DIR/usr/lib/modules"
 	rm -rf "$MKOSI_EXTRA_DIR/boot/plane-${VTL1_TARGET_PLANE}"
 	rm -f "$MKOSI_EXTRA_DIR/$CONFIG_VM_PLANES_REL"
+	rm -f "$MKOSI_EXTRA_DIR/$KCONFIG_KVM_PLANES_REL"
 	rm -f "$MKOSI_EXTRA_DIR/etc/lvbs/config-vm-planes"
 	rm -f "$MKOSI_EXTRA_DIR/$DRACUT_CONF_REL"
 	rm -f "$IMAGE_DIR/vm-planes-initrd.cpio"
@@ -137,11 +142,13 @@ rm -rf "$MKOSI_EXTRA_DIR/usr/lib/lvbs"
 rm -rf "$MKOSI_EXTRA_DIR/usr/lib/modules"
 rm -rf "$MKOSI_EXTRA_DIR/boot/plane-${VTL1_TARGET_PLANE}"
 rm -f "$MKOSI_EXTRA_DIR/$CONFIG_VM_PLANES_REL"
+rm -f "$MKOSI_EXTRA_DIR/$KCONFIG_KVM_PLANES_REL"
 rm -f "$MKOSI_EXTRA_DIR/etc/lvbs/config-vm-planes"
 rm -f "$MKOSI_EXTRA_DIR/$DRACUT_CONF_REL"
 
 mkdir -p "$(dirname "$MKOSI_EXTRA_DIR/$VTL1_INITRD_DEST_REL")"
 mkdir -p "$(dirname "$MKOSI_EXTRA_DIR/$CONFIG_VM_PLANES_REL")"
+mkdir -p "$(dirname "$MKOSI_EXTRA_DIR/$KCONFIG_KVM_PLANES_REL")"
 mkdir -p "$(dirname "$MKOSI_EXTRA_DIR/$DRACUT_CONF_REL")"
 
 cp -f "$VTL1_KERNEL_SRC" "$MKOSI_EXTRA_DIR/$VTL1_INITRD_DEST_REL"
@@ -219,9 +226,20 @@ PLANE_${VTL1_TARGET_PLANE}_KERNEL_FORMAT=elf
 PLANE_${VTL1_TARGET_PLANE}_CMDLINE="$VTL1_CMDLINE"
 EOF
 
+# Marker file read by the kernel VBS enable path at late_initcall.  It is placed
+# in the image /boot and embedded into the initramfs (see install_items below)
+# so it is present when only the initramfs is mounted.
+cat > "$MKOSI_EXTRA_DIR/$KCONFIG_KVM_PLANES_REL" <<EOF
+# Advertises that this image is provisioned with a KVM VM-planes secure plane.
+# The kernel (security/vbs/core.c) loads plane-1 only if CONFIG_VM_PLANES=y.
+CONFIG_VM_PLANES=y
+CONFIG_VBS=y
+CONFIG_VBS_KVM_PLANES=y
+EOF
+
 cat > "$MKOSI_EXTRA_DIR/$DRACUT_CONF_REL" <<EOF
 # Embed the secure-plane kernel payload and VM planes config into the initrd.
-install_items+=" /$VTL1_INITRD_DEST_REL /$CONFIG_VM_PLANES_REL "
+install_items+=" /$VTL1_INITRD_DEST_REL /$CONFIG_VM_PLANES_REL /$KCONFIG_KVM_PLANES_REL "
 # Only include modules needed for a KVM guest — keeps initrd small.
 hostonly="no"
 add_dracutmodules+=" kernel-modules base rootfs-block "
@@ -246,6 +264,9 @@ echo "[INSTRUMENTATION]   Load offset: $VTL1_LOAD_OFFSET"
 
 echo "[INSTRUMENTATION] config-vm-planes generated:"
 cat "$MKOSI_EXTRA_DIR/$CONFIG_VM_PLANES_REL"
+
+echo "[INSTRUMENTATION] Kconfig.kvm-planes generated (/$KCONFIG_KVM_PLANES_REL):"
+cat "$MKOSI_EXTRA_DIR/$KCONFIG_KVM_PLANES_REL"
 
 echo ""
 echo "========== KERNEL STAGING SUMMARY =========="
