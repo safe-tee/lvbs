@@ -26,14 +26,16 @@ BUILD_ROOT="${BUILD_ROOT:-$LVBS_ROOT/build/kernel}"
 # layer the VBS/VM-planes options on top via olddefconfig.
 LINUX_KERNEL_CONFIG="${LINUX_KERNEL_CONFIG:-/boot/config-$(uname -r)}"
 
-# VBS/HEKI core plus the KVM VM-planes backend and the in-kernel secure-plane
-# monitor. All are built-in on purpose: they run during early boot / plane
-# setup and cannot be loadable modules.
-LVBS_CONFIG_OPTS=(VM_PLANES VBS VBS_HEKI VBS_KVM_PLANES VBS_SECURE_MONITOR)
+# Minimal VBS: the core framework plus the KVM software-planes backend.  Both
+# are built-in on purpose: they run during early boot / plane setup and cannot
+# be loadable modules.  These are the only VBS symbols currently available in
+# the kernel tree being built (CONFIG_VBS_KVM_PLANES depends on CONFIG_KVM_GUEST,
+# expected from the base config).
+LVBS_CONFIG_OPTS=(VBS VBS_KVM_PLANES)
 
 # Subset that is mandatory: abort the build if any of these are not set after
 # olddefconfig (e.g. dropped due to unmet dependencies).
-LVBS_CONFIG_REQUIRED=(VM_PLANES VBS_KVM_PLANES)
+LVBS_CONFIG_REQUIRED=(VBS VBS_KVM_PLANES)
 
 enable_config() {
 	local opt="$1"
@@ -53,7 +55,7 @@ configure() {
 		cp "$LINUX_KERNEL_CONFIG" "$BUILD_ROOT/.config"
 	fi
 
-	# Enforce the LVBS/HEKI/VSM options on every build.
+	# Enforce the VBS options on every build.
 	local opt
 	for opt in "${LVBS_CONFIG_OPTS[@]}"; do
 		enable_config "$opt"
