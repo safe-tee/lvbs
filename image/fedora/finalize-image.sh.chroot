@@ -36,7 +36,7 @@ EOF
 # block (~0x7fb6d000+) stay owned by plane 0.  (A later step has the secure plane
 # seal this exact region in plane 0's EPT once plane 1 has booted.)
 cat > /etc/kernel/cmdline <<'EOF'
-earlycon=uart8250,io,0x3f8,115200n8 console=ttyS0 console=tty0 root=/dev/vda2 rw rd.systemd.show_status=true lsm=bpf,lockdown,yama,integrity systemd.gpt_auto=0 enable-vm-planes=1 memmap=0x3c000000$0x40000000
+earlycon=uart8250,io,0x3f8,115200n8 console=ttyS0 console=tty0 root=/dev/vda2 rw rd.systemd.show_status=true lsm=bpf,lockdown,yama,integrity systemd.gpt_auto=0 enable-kvm-planes=1 memmap=0x3c000000$0x40000000
 EOF
 
 echo "[INSTRUMENTATION] Kernel command line configured:"

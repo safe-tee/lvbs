@@ -84,9 +84,9 @@ VTL1_CMDLINE="$VTL1_CMDLINE_DEFAULT"
 VTL1_INITRD_DEST_REL="boot/plane-${VTL1_TARGET_PLANE}/vmlinux"
 CONFIG_VM_PLANES_REL="config-vm-planes"
 # Marker consumed at boot by the kernel VBS enable path (security/vbs/core.c),
-# which reads /boot/Kconfig.kvm-planes and loads plane-1 only if it advertises
-# CONFIG_VM_PLANES=y.
-KCONFIG_KVM_PLANES_REL="boot/Kconfig.kvm-planes"
+# which reads /etc/Kconfig.kvm-planes and loads plane-1 only if it advertises
+# CONFIG_VM_PLANES=y.  /etc is reliably present in the initramfs (unlike /boot).
+KCONFIG_KVM_PLANES_REL="etc/Kconfig.kvm-planes"
 DRACUT_CONF_REL="etc/dracut.conf.d/50-lvbs-vtl1.conf"
 MKOSI_EXTRA_DIR="$IMAGE_DIR/mkosi.extra"
 
@@ -227,7 +227,7 @@ PLANE_${VTL1_TARGET_PLANE}_CMDLINE="$VTL1_CMDLINE"
 EOF
 
 # Marker file read by the kernel VBS enable path at late_initcall.  It is placed
-# in the image /boot and embedded into the initramfs (see install_items below)
+# in the image /etc and embedded into the initramfs (see install_items below)
 # so it is present when only the initramfs is mounted.
 cat > "$MKOSI_EXTRA_DIR/$KCONFIG_KVM_PLANES_REL" <<EOF
 # Advertises that this image is provisioned with a KVM VM-planes secure plane.
@@ -291,6 +291,10 @@ VM_PLANES_INITRD="$IMAGE_DIR/vm-planes-initrd.cpio"
 VM_PLANES_INITRD_STAGING="$(mktemp -d)"
 mkdir -p "$VM_PLANES_INITRD_STAGING/boot/plane-${VTL1_TARGET_PLANE}"
 cp -f "$MKOSI_EXTRA_DIR/$CONFIG_VM_PLANES_REL" "$VM_PLANES_INITRD_STAGING/$CONFIG_VM_PLANES_REL"
+# The VBS marker must ride in this cpio (mkosi Initrds=) so it lands in the
+# kernel's initramfs where security/vbs/core.c reads it at late_initcall.
+mkdir -p "$VM_PLANES_INITRD_STAGING/$(dirname "$KCONFIG_KVM_PLANES_REL")"
+cp -f "$MKOSI_EXTRA_DIR/$KCONFIG_KVM_PLANES_REL" "$VM_PLANES_INITRD_STAGING/$KCONFIG_KVM_PLANES_REL"
 cp -f "$MKOSI_EXTRA_DIR/$VTL1_INITRD_DEST_REL" "$VM_PLANES_INITRD_STAGING/$VTL1_INITRD_DEST_REL"
 (cd "$VM_PLANES_INITRD_STAGING" && find . | cpio -o -H newc) > "$VM_PLANES_INITRD"
 rm -rf "$VM_PLANES_INITRD_STAGING"

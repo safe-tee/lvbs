@@ -16,6 +16,7 @@
 # Generated plane staging under mkosi.extra (static files are kept)
 /mkosi.extra/boot/
 /mkosi.extra/config-vm-planes
+/mkosi.extra/etc/Kconfig.kvm-planes
 /mkosi.extra/etc/lvbs/
 /mkosi.extra/etc/dracut.conf.d/
 /mkosi.extra/usr/lib/lvbs/
