@@ -2,4 +2,6 @@
 
 sudo dnf install -y \
 	glib2-devel \
-	jansson-devel
+	jansson-devel \
+	swtpm \
+	swtpm-tools
